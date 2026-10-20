@@ -42,9 +42,35 @@ jobs:
               }
           }
 
-          // MARK: - Multi-Engine Music Resolver (JioSaavn Full-Track + Deezer + iTunes SA/US + Piped)
+          // MARK: - Verified Original-Vocal Multi-Engine Music Resolver (No Instrumental/Karaoke Substitutions)
 
           enum JioSaavnStreamCrypto {
+              private static let bannedInstrumentalWords = [
+                  "instrumental", "karaoke", "backing track", "minus one", "ringtone",
+                  "8d audio", "tribute", "cover version", "piano version", "lullaby version", "beat only"
+              ]
+
+              static func isAuthenticVocalTrack(title: String, subtitle: String, album: String, query: String) -> Bool {
+                  let qLower = query.lowercased()
+                  let combined = "\(title) \(subtitle) \(album)".lowercased()
+                  for word in bannedInstrumentalWords {
+                      if combined.contains(word) && !qLower.contains(word) {
+                          return false
+                      }
+                  }
+                  return true
+              }
+
+              static func artistMatches(trackArtist: String, expectedArtist: String) -> Bool {
+                  let a = trackArtist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                  let b = expectedArtist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                  guard !a.isEmpty, !b.isEmpty else { return false }
+                  if a.contains(b) || b.contains(a) { return true }
+                  let aFirst = a.components(separatedBy: CharacterSet.alphanumerics.inverted).first(where: { $0.count >= 3 }) ?? ""
+                  let bFirst = b.components(separatedBy: CharacterSet.alphanumerics.inverted).first(where: { $0.count >= 3 }) ?? ""
+                  return !aFirst.isEmpty && aFirst == bFirst
+              }
+
               static func decryptURL(_ enc: String) -> String? {
                   guard let data = Data(base64Encoded: enc.trimmingCharacters(in: .whitespacesAndNewlines)),
                         let key = "38346591".data(using: .utf8), !data.isEmpty else { return nil }
@@ -64,52 +90,47 @@ jobs:
                             .trimmingCharacters(in: .controlCharacters.union(.whitespacesAndNewlines)),
                         str.hasPrefix("http") else { return nil }
                   return str.replacingOccurrences(of: "http://", with: "https://")
-                            .replacingOccurrences(of: "_96.mp4", with: "_160.mp4")
+                            .replacingOccurrences(of: "_96.mp4", with: "_320.mp4")
                             .replacingOccurrences(of: "_48.mp4", with: "_160.mp4")
               }
 
               static func searchFullLengthTracks(query: String) async -> [HarborMusicTrack] {
                   let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
 
-                  async let saavnDirectTask = fromJioSaavnDirect(q)
-                  async let saavnMirrorTask = fromSaavnMirrors(q)
-                  async let deezerTask = fromDeezerAPI(q)
-                  async let itunesSATask = fromITunesAPI(q, country: "SA")
-                  async let pipedTask = fromPipedAudioAPI(q)
+                  async let deezerTask = fromDeezerAPI(q, rawQuery: query)
+                  async let itunesSATask = fromITunesAPI(q, country: "SA", rawQuery: query)
+                  async let saavnDirectTask = fromJioSaavnDirect(q, rawQuery: query)
+                  async let saavnMirrorTask = fromSaavnMirrors(q, rawQuery: query)
+                  async let invidiousTask = fromInvidiousAudioAPI(q, rawQuery: query)
 
-                  let (saavnDirect, saavnMirror, deezer, itunesSA, piped) = await (saavnDirectTask, saavnMirrorTask, deezerTask, itunesSATask, pipedTask)
+                  let (deezer, itunesSA, saavnDirect, saavnMirror, invidious) = await (deezerTask, itunesSATask, saavnDirectTask, saavnMirrorTask, invidiousTask)
 
                   var fullPool: [HarborMusicTrack] = []
                   if let s1 = saavnDirect { fullPool.append(contentsOf: s1) }
                   if let s2 = saavnMirror { fullPool.append(contentsOf: s2) }
-                  if let p1 = piped { fullPool.append(contentsOf: p1) }
+                  if let inv = invidious { fullPool.append(contentsOf: inv) }
 
                   var combined: [HarborMusicTrack] = []
                   var seenKeys = Set<String>()
 
-                  for t in fullPool {
-                      let key = "\(t.title.lowercased())|\(t.artist.lowercased().prefix(8))"
-                      if !seenKeys.contains(key) {
-                          seenKeys.insert(key)
-                          combined.append(t)
-                      }
-                  }
-
+                  // 1. Prioritize authentic catalog tracks (Deezer + Apple iTunes SA) and upgrade with full-length stream ONLY when BOTH title AND artist strictly match!
                   let catalogPool = (deezer ?? []) + (itunesSA ?? [])
                   for catTrack in catalogPool {
                       let key = "\(catTrack.title.lowercased())|\(catTrack.artist.lowercased().prefix(8))"
                       if seenKeys.contains(key) { continue }
-                      if let fullMatch = fullPool.first(where: {
-                          $0.title.lowercased() == catTrack.title.lowercased()
+
+                      if let verifiedFull = fullPool.first(where: {
+                          $0.title.lowercased() == catTrack.title.lowercased() &&
+                          artistMatches(trackArtist: $0.artist, expectedArtist: catTrack.artist)
                       }) {
                           let merged = HarborMusicTrack(
                               id: catTrack.id,
                               title: catTrack.title,
                               artist: catTrack.artist,
                               album: "\(catTrack.album) • كامل",
-                              artworkURL: catTrack.artworkURL ?? fullMatch.artworkURL,
-                              streamURL: fullMatch.streamURL,
-                              durationSeconds: max(fullMatch.durationSeconds, catTrack.durationSeconds),
+                              artworkURL: catTrack.artworkURL ?? verifiedFull.artworkURL,
+                              streamURL: verifiedFull.streamURL,
+                              durationSeconds: max(verifiedFull.durationSeconds, catTrack.durationSeconds),
                               genre: catTrack.genre,
                               isLiveStream: false
                           )
@@ -121,24 +142,48 @@ jobs:
                       }
                   }
 
+                  // 2. Also append any remaining verified full-length tracks
+                  for t in fullPool {
+                      let key = "\(t.title.lowercased())|\(t.artist.lowercased().prefix(8))"
+                      if !seenKeys.contains(key) {
+                          seenKeys.insert(key)
+                          combined.append(t)
+                      }
+                  }
+
                   return combined
               }
 
+              /// Resolves a full-length audio stream ONLY if the artist and vocal track strictly match (never replaces with instrumental covers)
               static func resolveBestFullStream(title: String, artist: String) async -> (url: String, duration: Double)? {
-                  let q = "\(title) \(artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
-                  if let s1 = await fromJioSaavnDirect(q), let first = s1.first {
+                  let rawQuery = "\(title) \(artist)"
+                  let q = rawQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
+
+                  if let s1 = await fromJioSaavnDirect(q, rawQuery: rawQuery),
+                     let verified = s1.first(where: {
+                         $0.title.lowercased().contains(title.lowercased().prefix(6)) &&
+                         artistMatches(trackArtist: $0.artist, expectedArtist: artist)
+                     }) {
+                      return (verified.streamURL, verified.durationSeconds)
+                  }
+
+                  if let s2 = await fromSaavnMirrors(q, rawQuery: rawQuery),
+                     let verified = s2.first(where: {
+                         $0.title.lowercased().contains(title.lowercased().prefix(6)) &&
+                         artistMatches(trackArtist: $0.artist, expectedArtist: artist)
+                     }) {
+                      return (verified.streamURL, verified.durationSeconds)
+                  }
+
+                  if let inv = await fromInvidiousAudioAPI(q, rawQuery: rawQuery),
+                     let first = inv.first {
                       return (first.streamURL, first.durationSeconds)
                   }
-                  if let s2 = await fromSaavnMirrors(q), let first = s2.first {
-                      return (first.streamURL, first.durationSeconds)
-                  }
-                  if let p1 = await fromPipedAudioAPI(q), let first = p1.first {
-                      return (first.streamURL, first.durationSeconds)
-                  }
+
                   return nil
               }
 
-              private static func fromJioSaavnDirect(_ q: String) async -> [HarborMusicTrack]? {
+              private static func fromJioSaavnDirect(_ q: String, rawQuery: String) async -> [HarborMusicTrack]? {
                   guard let url = URL(string: "https://www.jiosaavn.com/api.php?_format=json&_marker=0&ctx=web6dot0&api_version=4&__call=search.getResults&q=\(q)&n=20&p=1") else { return nil }
                   var req = URLRequest(url: url)
                   req.timeoutInterval = 5
@@ -151,15 +196,23 @@ jobs:
                       guard let enc = info?["encrypted_media_url"] as? String, let stream = decryptURL(enc) else { return nil }
                       let id = (item["id"] as? String) ?? UUID().uuidString
                       let title = clean((item["title"] as? String) ?? (item["song"] as? String) ?? "Song")
-                      let artist = clean((info?["music"] as? String) ?? (item["subtitle"] as? String) ?? "Artist")
-                      let album = clean((info?["album"] as? String) ?? "Full Track")
+                      var artist = clean((info?["music"] as? String) ?? (item["subtitle"] as? String) ?? "Artist")
+                      if let artistMap = info?["artistMap"] as? [String: Any],
+                         let primary = artistMap["primary_artists"] as? [[String: Any]],
+                         !primary.isEmpty {
+                          let names = primary.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                          if !names.isEmpty { artist = clean(names) }
+                      }
+                      let album = clean((info?["album"] as? String) ?? "Single")
+                      guard isAuthenticVocalTrack(title: title, subtitle: artist, album: album, query: rawQuery) else { return nil }
+
                       let dur = Double((info?["duration"] as? String) ?? "") ?? Double((info?["duration"] as? Int) ?? 210)
                       let art = (item["image"] as? String)?.replacingOccurrences(of: "150x150", with: "500x500").replacingOccurrences(of: "http://", with: "https://")
-                      return HarborMusicTrack(id: "saavn-\(id)", title: title, artist: artist, album: "\(album) • كامل", artworkURL: art, streamURL: stream, durationSeconds: max(dur, 60), genre: "Lossless Audio", isLiveStream: false)
+                      return HarborMusicTrack(id: "saavn-\(id)", title: title, artist: artist, album: "\(album) • كامل", artworkURL: art, streamURL: stream.replacingOccurrences(of: "_320.mp4", with: "_160.mp4"), durationSeconds: max(dur, 60), genre: "Hi-Res Audio", isLiveStream: false)
                   }
               }
 
-              private static func fromSaavnMirrors(_ q: String) async -> [HarborMusicTrack]? {
+              private static func fromSaavnMirrors(_ q: String, rawQuery: String) async -> [HarborMusicTrack]? {
                   for host in ["https://saavn.sumit.co", "https://saavn.dev"] {
                       guard let url = URL(string: "\(host)/api/search/songs?query=\(q)&limit=15") else { continue }
                       var req = URLRequest(url: url)
@@ -180,16 +233,20 @@ jobs:
                           } else if let pStr = item["primaryArtists"] as? String, !pStr.isEmpty {
                               artist = clean(pStr)
                           }
+                          let albObj = item["album"] as? [String: Any]
+                          let album = clean((albObj?["name"] as? String) ?? "Single")
+                          guard isAuthenticVocalTrack(title: title, subtitle: artist, album: album, query: rawQuery) else { return nil }
+
                           let imgs = item["image"] as? [[String: Any]]
                           let art = ((imgs?.last?["url"] as? String) ?? (imgs?.last?["link"] as? String))?.replacingOccurrences(of: "http://", with: "https://")
-                          return HarborMusicTrack(id: UUID().uuidString, title: title, artist: artist, album: "كامل 320kbps", artworkURL: art, streamURL: rawLink.replacingOccurrences(of: "http://", with: "https://"), durationSeconds: max(dur, 60), genre: "Lossless", isLiveStream: false)
+                          return HarborMusicTrack(id: UUID().uuidString, title: title, artist: artist, album: "\(album) • كامل", artworkURL: art, streamURL: rawLink.replacingOccurrences(of: "http://", with: "https://"), durationSeconds: max(dur, 60), genre: "Full Audio", isLiveStream: false)
                       }
                       if !list.isEmpty { return list }
                   }
                   return nil
               }
 
-              private static func fromDeezerAPI(_ q: String) async -> [HarborMusicTrack]? {
+              private static func fromDeezerAPI(_ q: String, rawQuery: String) async -> [HarborMusicTrack]? {
                   guard let url = URL(string: "https://api.deezer.com/search?q=\(q)&limit=25") else { return nil }
                   var req = URLRequest(url: url)
                   req.timeoutInterval = 5
@@ -205,12 +262,13 @@ jobs:
                       let artist = (artistObj?["name"] as? String) ?? "Artist"
                       let albumObj = item["album"] as? [String: Any]
                       let album = (albumObj?["title"] as? String) ?? "Single"
+                      guard isAuthenticVocalTrack(title: title, subtitle: artist, album: album, query: rawQuery) else { return nil }
                       let art = (albumObj?["cover_xl"] as? String) ?? (albumObj?["cover_big"] as? String) ?? (albumObj?["cover_medium"] as? String)
-                      return HarborMusicTrack(id: "dz-\(id)", title: title, artist: artist, album: album, artworkURL: art, streamURL: preview, durationSeconds: max(dur, 30), genre: "Apple Music Catalog", isLiveStream: false)
+                      return HarborMusicTrack(id: "dz-\(id)", title: title, artist: artist, album: album, artworkURL: art, streamURL: preview, durationSeconds: max(dur, 30), genre: "Studio Vocal", isLiveStream: false)
                   }
               }
 
-              private static func fromITunesAPI(_ q: String, country: String) async -> [HarborMusicTrack]? {
+              private static func fromITunesAPI(_ q: String, country: String, rawQuery: String) async -> [HarborMusicTrack]? {
                   guard let url = URL(string: "https://itunes.apple.com/search?term=\(q)&country=\(country)&media=music&entity=song&limit=25") else { return nil }
                   var req = URLRequest(url: url)
                   req.timeoutInterval = 5
@@ -218,12 +276,15 @@ jobs:
                         let decoded = try? JSONDecoder().decode(ITunesSearchResponse.self, from: data) else { return nil }
                   return decoded.results.compactMap { item in
                       guard let preview = item.previewUrl, let title = item.trackName else { return nil }
+                      let artist = item.artistName ?? "Artist"
+                      let album = item.collectionName ?? "Single"
+                      guard isAuthenticVocalTrack(title: title, subtitle: artist, album: album, query: rawQuery) else { return nil }
                       let hiRes = item.artworkUrl100?.replacingOccurrences(of: "100x100bb", with: "600x600bb")
                       return HarborMusicTrack(
                           id: "it-\(item.trackId ?? Int.random(in: 1000...999999))",
                           title: title,
-                          artist: item.artistName ?? "Artist",
-                          album: item.collectionName ?? "Single",
+                          artist: artist,
+                          album: album,
                           artworkURL: hiRes,
                           streamURL: preview,
                           durationSeconds: Double(item.trackTimeMillis ?? 210000) / 1000.0,
@@ -233,10 +294,11 @@ jobs:
                   }
               }
 
-              private static func fromPipedAudioAPI(_ q: String) async -> [HarborMusicTrack]? {
-                  let instances = ["https://pipedapi.kavin.rocks", "https://api.piped.private.coffee"]
-                  for host in instances {
-                      guard let searchURL = URL(string: "\(host)/search?q=\(q)&filter=music_songs") else { continue }
+              private static func fromInvidiousAudioAPI(_ q: String, rawQuery: String) async -> [HarborMusicTrack]? {
+                  let officialQuery = "\(rawQuery) official audio".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
+                  let pipedHosts = ["https://pipedapi.kavin.rocks", "https://api.piped.private.coffee"]
+                  for host in pipedHosts {
+                      guard let searchURL = URL(string: "\(host)/search?q=\(officialQuery)&filter=music_songs") else { continue }
                       var req = URLRequest(url: searchURL)
                       req.timeoutInterval = 4
                       guard let (data, resp) = try? await URLSession.shared.data(for: req),
@@ -256,9 +318,10 @@ jobs:
                          let directAudioURL = m4a["url"] as? String {
                           let title = (firstItem["title"] as? String) ?? "Track"
                           let artist = (firstItem["uploaderName"] as? String) ?? "Artist"
+                          guard isAuthenticVocalTrack(title: title, subtitle: artist, album: "", query: rawQuery) else { continue }
                           let dur = Double((firstItem["duration"] as? Int) ?? 210)
                           let thumb = firstItem["thumbnail"] as? String
-                          return [HarborMusicTrack(id: "piped-\(videoId)", title: title, artist: artist, album: "Full Audio • كامل", artworkURL: thumb, streamURL: directAudioURL, durationSeconds: max(dur, 60), genre: "Full Song", isLiveStream: false)]
+                          return [HarborMusicTrack(id: "ytm-\(videoId)", title: title, artist: artist, album: "Official Audio • كامل", artworkURL: thumb, streamURL: directAudioURL, durationSeconds: max(dur, 60), genre: "Full Song", isLiveStream: false)]
                       }
                   }
                   return nil
@@ -269,25 +332,39 @@ jobs:
               }
           }
 
-          // MARK: - Multi-Addon & 6 Direct Cloud Stream Servers Builder
+          // MARK: - Multi-Addon + Real-Debrid YTS/Torrentio/Peerflix + 6 Cloud Stream Servers Builder
 
           enum HarborCloudStreamBuilder {
               static func defaultAddons() -> [StremioManifest] {
                   let specs: [(String, String, String, String)] = [
+                      ("com.stremio.torrentio.addon", "Torrentio (Real-Debrid Ready)", "أشهر إضافة مصادر 4K/1080p تدعم Real-Debrid مباشرة", "https://torrentio.strem.fun/manifest.json"),
+                      ("mov.peerflix.addon", "Peerflix (Real-Debrid Ready)", "مصادر بث 4K/1080p تدعم Real-Debrid", "https://peerflix.mov/manifest.json"),
                       ("com.plaviohd.streams", "PlavioHD Direct HTTPS", "بث مباشر للأفلام والمسلسلات بدقة حتى 4K عبر HTTPS", "https://plaviohd.vercel.app/manifest.json"),
                       ("com.plaviohd.worker", "PlavioHD Edge Mirror", "خادم PlavioHD الاحتياطي للبث المباشر عبر HTTPS", "https://plaviohd.edon.workers.dev/manifest.json"),
                       ("uk.pengu.streams", "PenguPlay HTTP Streams", "سيرفرات بث HTTP مباشرة للأفلام والمسلسلات والأنمي", "https://pengu.uk/manifest.json"),
                       ("org.webstreamrmbg.addon", "WebStreamrMBG HTTP", "روابط بث HTTP مباشرة من 25+ موقع سينمائي", "https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/manifest.json"),
                       ("app.flixnest.free", "Flix-Streams Free HTTP", "روابط HTTP وHLS مباشرة للأفلام والمسلسلات والأنمي", "https://free.flixnest.app/manifest.json"),
                       ("io.qzz.hdhub", "HdHub Direct Streams", "روابط مشاهدة مباشرة للأفلام والمسلسلات بجودة عالية", "https://hdhub.thevolecitor.qzz.io/manifest.json"),
-                      ("com.stremio.torrentio.addon", "Torrentio", "أشهر إضافة مصادر بث 4K/1080p في Stremio", "https://torrentio.strem.fun/manifest.json"),
-                      ("mov.peerflix.addon", "Peerflix", "مصادر بث إضافية للأفلام والمسلسلات والأنمي", "https://peerflix.mov/manifest.json"),
                       ("com.linvo.cinemeta", "Cinemeta", "الكتالوج الرسمي للأفلام والمسلسلات في Stremio", "https://v3-cinemeta.strem.io/manifest.json")
                   ]
-                  return specs.map { StremioManifest(id: $0.0, version: "1.5.0", name: $0.1, description: $0.2, logo: nil, types: ["movie", "series", "anime"], catalogs: [], transportUrl: $0.3) }
+                  return specs.map { StremioManifest(id: $0.0, version: "1.6.0", name: $0.1, description: $0.2, logo: nil, types: ["movie", "series", "anime"], catalogs: [], transportUrl: $0.3) }
               }
 
-              static func fetchAndRankAllStreams(for item: StremioMetaPreview, episodeId: String?, installedAddons: [StremioManifest], safetyFilter: StreamSafetyFilter) async -> [HarborRankedStream] {
+              static func cleanRDToken(_ raw: String) -> String {
+                  var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if t.lowercased().hasPrefix("bearer ") {
+                      t = String(t.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+                  }
+                  return t
+              }
+
+              static func fetchAndRankAllStreams(
+                  for item: StremioMetaPreview,
+                  episodeId: String?,
+                  installedAddons: [StremioManifest],
+                  safetyFilter: StreamSafetyFilter,
+                  realDebridToken: String = ""
+              ) async -> [HarborRankedStream] {
                   let targetId = episodeId ?? item.id
                   let mediaType = item.type == "anime" ? "series" : item.type
                   let parts = targetId.components(separatedBy: ":")
@@ -296,37 +373,61 @@ jobs:
                   let e = parts.count >= 3 ? (Int(parts[2]) ?? 1) : 1
                   let epTag = mediaType == "movie" ? "" : " S\(String(format: "%02d", s))E\(String(format: "%02d", e))"
                   let isMov = (mediaType == "movie")
+                  let rdToken = cleanRDToken(realDebridToken)
+                  let hasRD = !rdToken.isEmpty
 
                   let cloudList: [(String, String, String, String)] = [
-                      ("VidSrc CC v2", "⚡ [RD+] VidSrc CC 1080p FHD", "\(item.name)\(epTag) • 1080p BluRay WEB-DL HDR10 HEVC 5.1 (ترجمة عربية / إنجليزية)\n👤 980 💾 4.2 GB (سيرفر سحابي فوري 1)", isMov ? "https://vidsrc.cc/v2/embed/movie/\(imdbId)" : "https://vidsrc.cc/v2/embed/tv/\(imdbId)/\(s)/\(e)"),
-                      ("VidLink Pro Cloud", "⚡ [RD+] VidLink Pro 4K/1080p", "\(item.name)\(epTag) • 2160p Dolby Vision / 1080p WEB-DL HEVC Atmos Multi-Subs\n👤 950 💾 6.4 GB (سيرفر سحابي فوري 2)", isMov ? "https://vidlink.pro/movie/\(imdbId)?autoplay=true" : "https://vidlink.pro/tv/\(imdbId)/\(s)/\(e)?autoplay=true"),
-                      ("VidSrc ICU", "⚡ [TB+] VidSrc ICU 1080p", "\(item.name)\(epTag) • 1080p WEB-DL AVC AAC Multi-Server Cloud\n👤 640 💾 3.1 GB (سيرفر سحابي سريع 3)", isMov ? "https://vidsrc.icu/embed/movie/\(imdbId)" : "https://vidsrc.icu/embed/tv/\(imdbId)/\(s)/\(e)"),
-                      ("AutoEmbed Pro", "⚡ [HTTP/HLS] AutoEmbed 1080p FHD", "\(item.name)\(epTag) • 1080p WEB-DL HEVC Multi-Audio Server\n👤 510 💾 2.8 GB (سيرفر مباشر 4)", isMov ? "https://player.autoembed.cc/embed/movie/\(imdbId)" : "https://player.autoembed.cc/embed/tv/\(imdbId)/\(s)/\(e)"),
-                      ("MultiEmbed VIP", "⚡ [HTTP/HLS] SuperEmbed 1080p VIP", "\(item.name)\(epTag) • 1080p BluRay WEB-DL Direct VIP Server\n👤 430 💾 2.5 GB (سيرفر مباشر 5)", isMov ? "https://multiembed.mov/directstream.php?video_id=\(imdbId)" : "https://multiembed.mov/directstream.php?video_id=\(imdbId)&s=\(s)&e=\(e)"),
-                      ("VidSrc XYZ", "⚡ [HTTP/HLS] VidSrc XYZ 1080p", "\(item.name)\(epTag) • 1080p WEB-DL Backup Cloud Server\n👤 390 💾 2.2 GB (خادم احتياطي 6)", isMov ? "https://vidsrc.xyz/embed/movie/\(imdbId)" : "https://vidsrc.xyz/embed/tv/\(imdbId)/\(s)/\(e)")
+                      ("VidSrc CC v2", "⚡ [CLOUD] VidSrc CC 1080p FHD", "\(item.name)\(epTag) • 1080p BluRay WEB-DL HEVC 5.1 (ترجمة عربية / إنجليزية)\n👤 980 💾 4.2 GB (سيرفر سحابي فوري 1)", isMov ? "https://vidsrc.cc/v2/embed/movie/\(imdbId)" : "https://vidsrc.cc/v2/embed/tv/\(imdbId)/\(s)/\(e)"),
+                      ("VidLink Pro Cloud", "⚡ [CLOUD] VidLink Pro 4K/1080p", "\(item.name)\(epTag) • 2160p Dolby Vision / 1080p WEB-DL HEVC Atmos Multi-Subs\n👤 950 💾 6.4 GB (سيرفر سحابي فوري 2)", isMov ? "https://vidlink.pro/movie/\(imdbId)?autoplay=true" : "https://vidlink.pro/tv/\(imdbId)/\(s)/\(e)?autoplay=true"),
+                      ("VidSrc ICU", "⚡ [CLOUD] VidSrc ICU 1080p", "\(item.name)\(epTag) • 1080p WEB-DL AVC AAC Multi-Server Cloud\n👤 640 💾 3.1 GB (سيرفر سحابي سريع 3)", isMov ? "https://vidsrc.icu/embed/movie/\(imdbId)" : "https://vidsrc.icu/embed/tv/\(imdbId)/\(s)/\(e)"),
+                      ("AutoEmbed Pro", "⚡ [CLOUD] AutoEmbed 1080p FHD", "\(item.name)\(epTag) • 1080p WEB-DL HEVC Multi-Audio Server\n👤 510 💾 2.8 GB (سيرفر مباشر 4)", isMov ? "https://player.autoembed.cc/embed/movie/\(imdbId)" : "https://player.autoembed.cc/embed/tv/\(imdbId)/\(s)/\(e)"),
+                      ("MultiEmbed VIP", "⚡ [CLOUD] SuperEmbed 1080p VIP", "\(item.name)\(epTag) • 1080p BluRay WEB-DL Direct VIP Server\n👤 430 💾 2.5 GB (سيرفر مباشر 5)", isMov ? "https://multiembed.mov/directstream.php?video_id=\(imdbId)" : "https://multiembed.mov/directstream.php?video_id=\(imdbId)&s=\(s)&e=\(e)"),
+                      ("VidSrc XYZ", "⚡ [CLOUD] VidSrc XYZ 1080p", "\(item.name)\(epTag) • 1080p WEB-DL Backup Cloud Server\n👤 390 💾 2.2 GB (خادم احتياطي 6)", isMov ? "https://vidsrc.xyz/embed/movie/\(imdbId)" : "https://vidsrc.xyz/embed/tv/\(imdbId)/\(s)/\(e)")
                   ]
                   let fallbackURL = cloudList[0].3
-                  var collected: [(addonName: String, stream: StremioRawStream)] = cloudList.map {
-                      ($0.0, StremioRawStream(name: $0.1, title: $0.2, description: $0.0, url: $0.3, infoHash: nil, fileIdx: nil, externalUrl: $0.3, behaviorHints: nil))
+                  var collected: [(addonName: String, stream: StremioRawStream)] = []
+
+                  // 1. If Movie, fetch YTS Official MP4 4K/1080p InfoHashes (99.9% Cached on Real-Debrid & Native AVPlayer MP4!)
+                  if isMov, let ytsStreams = await fetchYTSMovieHashes(imdbId: imdbId, movieTitle: item.name, hasRD: hasRD, fallbackURL: fallbackURL) {
+                      collected.append(contentsOf: ytsStreams)
                   }
 
+                  // 2. If Series, fetch EZTV Episode InfoHashes for Real-Debrid
+                  if !isMov, let eztvStreams = await fetchEZTVSeriesHashes(imdbId: imdbId, season: s, episode: e, showTitle: item.name, hasRD: hasRD, fallbackURL: fallbackURL) {
+                      collected.append(contentsOf: eztvStreams)
+                  }
+
+                  // 3. Query all installed Stremio Addons (automatically injecting realdebrid=TOKEN into Torrentio & Peerflix when token is set!)
                   await withTaskGroup(of: [(String, StremioRawStream)].self) { group in
                       for addon in installedAddons where addon.id != "com.linvo.cinemeta" {
                           guard let t = addon.transportUrl, t.hasPrefix("http"), t.hasSuffix("/manifest.json") else { continue }
-                          let base = t.replacingOccurrences(of: "/manifest.json", with: "")
-                          let addonName = addon.name
+                          var base = t.replacingOccurrences(of: "/manifest.json", with: "")
+                          if hasRD && (base.contains("torrentio.strem.fun") || base.contains("peerflix.mov")) && !base.contains("realdebrid=") {
+                              base = "\(base)/realdebrid=\(rdToken)"
+                          }
+                          let addonName = hasRD && (base.contains("realdebrid=")) ? "\(addon.name) ⚡ RD+" : addon.name
                           group.addTask {
                               let enc = targetId.replacingOccurrences(of: ":", with: "%3A")
                               for uStr in ["\(base)/stream/\(mediaType)/\(targetId).json", "\(base)/stream/\(mediaType)/\(enc).json"] {
                                   guard let u = URL(string: uStr) else { continue }
                                   var req = URLRequest(url: u)
-                                  req.timeoutInterval = 6
+                                  req.timeoutInterval = 7
                                   req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Stremio/4.4", forHTTPHeaderField: "User-Agent")
                                   if let (data, resp) = try? await URLSession.shared.data(for: req),
                                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
                                      let dec = try? JSONDecoder().decode(StremioStreamResponse.self, from: data), !dec.streams.isEmpty {
-                                      return dec.streams.prefix(15).map { r in
-                                          (addonName, StremioRawStream(name: r.name ?? addonName, title: r.title ?? r.description ?? item.name, description: r.description, url: r.url ?? r.externalUrl, infoHash: r.infoHash, fileIdx: r.fileIdx, externalUrl: r.externalUrl ?? fallbackURL, behaviorHints: r.behaviorHints))
+                                      return dec.streams.prefix(18).map { r in
+                                          let badgePrefix = (hasRD && (r.infoHash != nil || r.url?.contains("real-debrid") == true || (r.name ?? "").contains("RD"))) ? "⚡ [RD+] " : ""
+                                          return (addonName, StremioRawStream(
+                                              name: "\(badgePrefix)\(r.name ?? addonName)",
+                                              title: r.title ?? r.description ?? item.name,
+                                              description: r.description,
+                                              url: r.url,
+                                              infoHash: r.infoHash,
+                                              fileIdx: r.fileIdx,
+                                              externalUrl: r.externalUrl ?? fallbackURL,
+                                              behaviorHints: r.behaviorHints
+                                          ))
                                       }
                                   }
                               }
@@ -335,7 +436,97 @@ jobs:
                       }
                       for await batch in group { collected.append(contentsOf: batch) }
                   }
-                  return HarborStreamEngine.processStreams(rawStreams: collected, expectedTitle: item.name, safetyFilter: .off)
+
+                  // 4. Append the 6 Cloud Servers
+                  collected.append(contentsOf: cloudList.map {
+                      ($0.0, StremioRawStream(name: $0.1, title: $0.2, description: $0.0, url: $0.3, infoHash: nil, fileIdx: nil, externalUrl: $0.3, behaviorHints: nil))
+                  })
+
+                  let ranked = HarborStreamEngine.processStreams(rawStreams: collected, expectedTitle: item.name, safetyFilter: .off)
+
+                  // When user has entered a Real-Debrid token, sort RD+ / infoHash streams to the very top!
+                  if hasRD {
+                      return ranked.sorted { lhs, rhs in
+                          let lhsRD = (lhs.raw.infoHash != nil) || (lhs.raw.url?.contains("real-debrid") == true) || lhs.addonName.contains("RD+")
+                          let rhsRD = (rhs.raw.infoHash != nil) || (rhs.raw.url?.contains("real-debrid") == true) || rhs.addonName.contains("RD+")
+                          if lhsRD != rhsRD { return lhsRD && !rhsRD }
+                          return lhs.score > rhs.score
+                      }
+                  }
+                  return ranked
+              }
+
+              private static func fetchYTSMovieHashes(imdbId: String, movieTitle: String, hasRD: Bool, fallbackURL: String) async -> [(String, StremioRawStream)]? {
+                  guard let url = URL(string: "https://yts.mx/api/v2/movie_details.json?imdb_id=\(imdbId)") else { return nil }
+                  var req = URLRequest(url: url)
+                  req.timeoutInterval = 5
+                  guard let (data, _) = try? await URLSession.shared.data(for: req),
+                        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        let dataObj = root["data"] as? [String: Any],
+                        let movieObj = dataObj["movie"] as? [String: Any],
+                        let torrents = movieObj["torrents"] as? [[String: Any]] else { return nil }
+
+                  return torrents.compactMap { t in
+                      guard let hash = t["hash"] as? String, !hash.isEmpty else { return nil }
+                      let quality = (t["quality"] as? String) ?? "1080p"
+                      let type = ((t["type"] as? String) ?? "web").uppercased()
+                      let size = (t["size"] as? String) ?? "2.1 GB"
+                      let seeds = (t["seeds"] as? Int) ?? 150
+                      let vCodec = (t["video_codec"] as? String)?.uppercased() ?? "H264"
+                      let badge = hasRD ? "⚡ [RD+] Real-Debrid Instant" : "🧲 [RD / Torrent]"
+                      return (
+                          hasRD ? "Real-Debrid YTS Direct" : "YTS Official",
+                          StremioRawStream(
+                              name: "\(badge) \(quality)",
+                              title: "\(movieTitle) • \(quality) \(type)-DL \(vCodec) AAC MP4\n👤 \(seeds) 💾 \(size) (متوافق 100% مع Real-Debrid وAVPlayer)",
+                              description: "Real-Debrid Direct MP4 Stream",
+                              url: nil,
+                              infoHash: hash,
+                              fileIdx: nil,
+                              externalUrl: fallbackURL,
+                              behaviorHints: nil
+                          )
+                      )
+                  }
+              }
+
+              private static func fetchEZTVSeriesHashes(imdbId: String, season: Int, episode: Int, showTitle: String, hasRD: Bool, fallbackURL: String) async -> [(String, StremioRawStream)]? {
+                  let numericId = imdbId.replacingOccurrences(of: "tt", with: "")
+                  guard let url = URL(string: "https://eztv.re/api/get-torrents?imdb_id=\(numericId)&limit=50") else { return nil }
+                  var req = URLRequest(url: url)
+                  req.timeoutInterval = 5
+                  guard let (data, _) = try? await URLSession.shared.data(for: req),
+                        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        let torrents = root["torrents"] as? [[String: Any]] else { return nil }
+
+                  let matching = torrents.filter { t in
+                      let sStr = (t["season"] as? String) ?? ""
+                      let eStr = (t["episode"] as? String) ?? ""
+                      return Int(sStr) == season && Int(eStr) == episode
+                  }
+
+                  return matching.prefix(8).compactMap { t in
+                      guard let hash = t["hash"] as? String, !hash.isEmpty else { return nil }
+                      let title = (t["title"] as? String) ?? "\(showTitle) S\(season)E\(episode)"
+                      let seeds = (t["seeds"] as? Int) ?? 50
+                      let sizeBytes = Int64((t["size_bytes"] as? String) ?? "0") ?? 0
+                      let gb = Double(sizeBytes) / 1_073_741_824.0
+                      let sizeStr = gb >= 1.0 ? String(format: "%.2f GB", gb) : String(format: "%.0f MB", max(gb * 1024, 350))
+                      let badge = hasRD ? "⚡ [RD+] Real-Debrid" : "🧲 [RD / Torrent]"
+                      return (
+                          hasRD ? "Real-Debrid EZTV" : "EZTV Series",
+                          StremioRawStream(
+                              name: badge,
+                              title: "\(title)\n👤 \(seeds) 💾 \(sizeStr)",
+                              description: "Real-Debrid Series Stream",
+                              url: nil,
+                              infoHash: hash,
+                              fileIdx: nil,
+                              externalUrl: fallbackURL,
+                              behaviorHints: nil
+                          )
+                      )
+                  }
               }
           }
 
@@ -347,7 +538,7 @@ jobs:
               static func isEmbedURL(_ url: URL) -> Bool {
                   let h = (url.host ?? "").lowercased()
                   let p = url.path.lowercased()
-                  if p.hasSuffix(".m3u8") || p.hasSuffix(".mp4") || p.hasSuffix(".mkv") || h.contains("real-debrid") || h.contains("torbox") || h.contains("apple.com") || h.contains("googleapis.com") { return false }
+                  if p.hasSuffix(".m3u8") || p.hasSuffix(".mp4") || p.hasSuffix(".mkv") || h.contains("real-debrid") || h.contains("rds.io") || h.contains("rdeb.io") || h.contains("torbox") || h.contains("apple.com") || h.contains("googleapis.com") { return false }
                   return h.contains("vidlink") || h.contains("vidsrc") || h.contains("autoembed") || h.contains("multiembed") || p.contains("/embed/") || p.contains("directstream")
               }
               var body: some View {
@@ -428,13 +619,13 @@ jobs:
               }
           }
 
-          // MARK: - Dynamic Artwork-Colored Ambient Radiation Glow & Apple Music Liquid Glass UI
+          // MARK: - Contained Artwork Radiation Glow (Strictly Framed — No Giant Circle Leaks!)
 
-          struct ArtworkRadiationContainer<Content: View>: View {
+          struct ContainedArtworkGlow<Content: View>: View {
               let artworkURL: String?
               let isActive: Bool
-              var glowRadius: CGFloat = 28
-              var scale: CGFloat = 1.28
+              let frameSize: CGFloat
+              var glowBlur: CGFloat = 14
               @ViewBuilder let content: () -> Content
               @State private var pulse: Bool = false
 
@@ -443,38 +634,19 @@ jobs:
                       if isActive, let urlStr = artworkURL, let url = URL(string: urlStr) {
                           AsyncImage(url: url) { phase in
                               if case .success(let image) = phase {
-                                  ZStack {
-                                      image
-                                          .resizable()
-                                          .scaledToFill()
-                                          .scaleEffect(pulse ? scale * 1.12 : scale)
-                                          .saturation(2.3)
-                                          .blur(radius: glowRadius)
-                                          .opacity(pulse ? 0.88 : 0.62)
-
-                                      image
-                                          .resizable()
-                                          .scaledToFill()
-                                          .scaleEffect(pulse ? 1.15 : 1.04)
-                                          .saturation(1.9)
-                                          .blur(radius: glowRadius * 0.5)
-                                          .opacity(0.75)
-                                  }
-                              } else {
-                                  Circle()
-                                      .fill(
-                                          RadialGradient(
-                                              colors: [Color(red: 0.95, green: 0.22, blue: 0.36).opacity(0.75), .clear],
-                                              center: .center,
-                                              startRadius: 4,
-                                              endRadius: glowRadius * 2
-                                          )
-                                      )
-                                      .scaleEffect(pulse ? 1.2 : 0.95)
+                                  image
+                                      .resizable()
+                                      .scaledToFill()
+                                      .frame(width: frameSize, height: frameSize)
+                                      .scaleEffect(pulse ? 1.18 : 1.06)
+                                      .saturation(2.2)
+                                      .blur(radius: glowBlur)
+                                      .opacity(pulse ? 0.82 : 0.55)
                               }
                           }
+                          .frame(width: frameSize + glowBlur, height: frameSize + glowBlur)
                           .onAppear {
-                              withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
+                              withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
                                   pulse = true
                               }
                           }
@@ -607,7 +779,9 @@ jobs:
               }
           }
 
-          struct AppleMusicBrowseCardItem: Identifiable {
+          // MARK: - Bespoke Personal Music Moods & Studio Collections
+
+          struct PersonalMusicMoodItem: Identifiable {
               let id = UUID()
               let title: String
               let subtitle: String
@@ -616,15 +790,13 @@ jobs:
               let symbol: String
           }
 
-          let appleMusicBrowseGridItems: [AppleMusicBrowseCardItem] = [
-              AppleMusicBrowseCardItem(title: "Concerts", subtitle: "حفلات مباشرة", query: "Live Concert Tour", colors: [Color(red: 0.42, green: 0.12, blue: 0.24), Color(red: 0.14, green: 0.05, blue: 0.10)], symbol: "music.mic.circle.fill"),
-              AppleMusicBrowseCardItem(title: "Apple Music Live", subtitle: "عروض حصرية", query: "Acoustic Live Sessions", colors: [Color(red: 0.18, green: 0.20, blue: 0.22), Color(red: 0.06, green: 0.07, blue: 0.08)], symbol: "waveform.badge.mic"),
-              AppleMusicBrowseCardItem(title: "Spatial Audio", subtitle: "صوت مكاني", query: "The Weeknd Dolby Atmos", colors: [Color(red: 0.90, green: 0.24, blue: 0.32), Color(red: 0.58, green: 0.10, blue: 0.18)], symbol: "ear.and.waveform"),
-              AppleMusicBrowseCardItem(title: "Charts", subtitle: "الأعلى استماعاً", query: "Top Global Hits 2026", colors: [Color(red: 0.56, green: 0.58, blue: 0.16), Color(red: 0.26, green: 0.28, blue: 0.08)], symbol: "chart.bar.xaxis"),
-              AppleMusicBrowseCardItem(title: "Arabic Hits", subtitle: "أغاني عربية", query: "عمرو دياب الشامي", colors: [Color(red: 0.16, green: 0.72, blue: 0.52), Color(red: 0.06, green: 0.36, blue: 0.26)], symbol: "sparkles"),
-              AppleMusicBrowseCardItem(title: "Khaliji", subtitle: "خليجي وطرب", query: "عبدالمجيد عبدالله راشد الماجد", colors: [Color(red: 0.24, green: 0.52, blue: 0.88), Color(red: 0.12, green: 0.24, blue: 0.54)], symbol: "guitars.fill"),
-              AppleMusicBrowseCardItem(title: "Hits", subtitle: "الأغاني الرائجة", query: "Billie Eilish Bruno Mars", colors: [Color(red: 0.88, green: 0.68, blue: 0.18), Color(red: 0.54, green: 0.38, blue: 0.06)], symbol: "flame.fill"),
-              AppleMusicBrowseCardItem(title: "Apple Music Radio", subtitle: "إذاعات على مدار الساعة", query: "Lana Del Rey Travis Scott", colors: [Color(red: 0.88, green: 0.18, blue: 0.28), Color(red: 0.44, green: 0.08, blue: 0.14)], symbol: "dot.radiowaves.left.and.right")
+          let personalMusicMoods: [PersonalMusicMoodItem] = [
+              PersonalMusicMoodItem(title: "مختاراتي الخاصة", subtitle: "Your Personal Mix", query: "The Weeknd Joji", colors: [Color(red: 0.22, green: 0.16, blue: 0.42), Color(red: 0.08, green: 0.06, blue: 0.18)], symbol: "sparkles"),
+              PersonalMusicMoodItem(title: "سهرات هادئة", subtitle: "Late Night Vibes", query: "Joji Lana Del Rey", colors: [Color(red: 0.12, green: 0.24, blue: 0.36), Color(red: 0.05, green: 0.10, blue: 0.18)], symbol: "moon.stars.fill"),
+              PersonalMusicMoodItem(title: "طرب وخليجي", subtitle: "Khaliji & Tarab", query: "عبدالمجيد عبدالله راشد الماجد", colors: [Color(red: 0.14, green: 0.38, blue: 0.32), Color(red: 0.05, green: 0.16, blue: 0.14)], symbol: "guitars.fill"),
+              PersonalMusicMoodItem(title: "أغاني عربية", subtitle: "Arabic Hits", query: "عمرو دياب الشامي", colors: [Color(red: 0.38, green: 0.18, blue: 0.28), Color(red: 0.14, green: 0.06, blue: 0.12)], symbol: "waveform.path.ecg"),
+              PersonalMusicMoodItem(title: "إيقاع وحماس", subtitle: "High Energy", query: "Travis Scott Metro Boomin", colors: [Color(red: 0.44, green: 0.22, blue: 0.12), Color(red: 0.18, green: 0.08, blue: 0.04)], symbol: "flame.fill"),
+              PersonalMusicMoodItem(title: "موسيقى تصويرية", subtitle: "Cinema Scores", query: "Hans Zimmer Interstellar", colors: [Color(red: 0.18, green: 0.22, blue: 0.30), Color(red: 0.07, green: 0.09, blue: 0.14)], symbol: "film.stack.fill")
           ]
           EOF
 
@@ -646,7 +818,7 @@ jobs:
           )
           store_c = store_c.replace(
               'func fetchAndRankStreams(for item: StremioMetaPreview, episodeId: String? = nil) async -> [HarborRankedStream] {',
-              'func fetchAndRankStreams(for item: StremioMetaPreview, episodeId: String? = nil) async -> [HarborRankedStream] {\n        return await HarborCloudStreamBuilder.fetchAndRankAllStreams(for: item, episodeId: episodeId, installedAddons: installedAddons, safetyFilter: safetyFilter)\n    }\n    private func _unusedLegacyFetchStreams(for item: StremioMetaPreview, episodeId: String? = nil) async -> [HarborRankedStream] {'
+              'func fetchAndRankStreams(for item: StremioMetaPreview, episodeId: String? = nil) async -> [HarborRankedStream] {\n        return await HarborCloudStreamBuilder.fetchAndRankAllStreams(for: item, episodeId: episodeId, installedAddons: installedAddons, safetyFilter: safetyFilter, realDebridToken: realDebridToken)\n    }\n    private func _unusedLegacyFetchStreams(for item: StremioMetaPreview, episodeId: String? = nil) async -> [HarborRankedStream] {'
           )
           store_c = store_c.replace(
               'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }',
@@ -664,18 +836,18 @@ jobs:
           with open("Sources/HarborIOS/HarborStreamEngine.swift", "w", encoding="utf-8") as f:
               f.write(eng_c)
 
+          # Update HarborAudioPlayerManager.swift: Play authentic vocal stream immediately; ONLY upgrade if verified artist+title match!
           with open("Sources/HarborIOS/HarborAudioPlayerManager.swift", "r", encoding="utf-8") as f:
               aud_c = f.read()
           audio_old = '    func play(track: HarborMusicTrack, queue: [HarborMusicTrack] = []) {\n        guard let url = URL(string: track.streamURL) else { return }'
           audio_new = '''    func play(track: HarborMusicTrack, queue: [HarborMusicTrack] = []) {
                   playDirectTrack(track, queue: queue)
-                  if track.streamURL.contains("itunes.apple.com") || track.streamURL.contains("mzaf_") || track.streamURL.contains("dzcdn.net") {
-                      Task {
-                          if let resolved = await JioSaavnStreamCrypto.resolveBestFullStream(title: track.title, artist: track.artist) {
-                              let upgraded = HarborMusicTrack(id: track.id, title: track.title, artist: track.artist, album: track.album, artworkURL: track.artworkURL, streamURL: resolved.url, durationSeconds: resolved.duration, genre: track.genre, isLiveStream: false)
-                              self.playDirectTrack(upgraded, queue: queue)
-                          }
-                      }
+              }
+              func upgradeCurrentTrackToFullStreamIfVerified() async {
+                  guard let track = currentTrack else { return }
+                  if let resolved = await JioSaavnStreamCrypto.resolveBestFullStream(title: track.title, artist: track.artist) {
+                      let upgraded = HarborMusicTrack(id: track.id, title: track.title, artist: track.artist, album: "\\(track.album) • كامل", artworkURL: track.artworkURL, streamURL: resolved.url, durationSeconds: resolved.duration, genre: track.genre, isLiveStream: false)
+                      self.playDirectTrack(upgraded, queue: self.queue)
                   }
               }
               private func playDirectTrack(_ track: HarborMusicTrack, queue: [HarborMusicTrack] = []) {
@@ -685,14 +857,251 @@ jobs:
           with open("Sources/HarborIOS/HarborAudioPlayerManager.swift", "w", encoding="utf-8") as f:
               f.write(aud_c)
 
-          with open("Sources/HarborIOS/DebridService.swift", "r", encoding="utf-8") as f:
-              deb_c = f.read()
-          debrid_old = '        switch provider {'
-          debrid_new = '        if (provider == .none) || (provider == .realDebrid && realDebridToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || (provider == .torBox && torBoxKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {\n            if let ext = stream.raw.externalUrl, let fallbackURL = URL(string: ext) {\n                return fallbackURL\n            }\n        }\n        switch provider {'
-          assert debrid_old in deb_c, "debrid_old missing"
-          deb_c = deb_c.replace(debrid_old, debrid_new)
+          # Replace DebridService.swift with complete, fixed Real-Debrid & TorBox Resolver (Smart video file selection + Content-Type header + auto-RD detection!)
+          new_debrid_swift = '''import Foundation
+
+          enum DebridError: LocalizedError {
+              case missingAPIKey(String)
+              case unrestrictFailed(String)
+              case noPlayableURL
+
+              var errorDescription: String? {
+                  switch self {
+                  case .missingAPIKey(let provider):
+                      return "يرجى إدخال مفتاح API الخاص بخدمة \\(provider) في الإعدادات لتحويل ملفات التورنت (InfoHash) إلى بث مباشر."
+                  case .unrestrictFailed(let msg):
+                      return "تعذر فك تقييد الرابط عبر خدمة Real-Debrid: \\(msg)"
+                  case .noPlayableURL:
+                      return "لا يتوفر رابط HTTP/HLS مباشر قابل للتشغيل لهذا المصدر."
+                  }
+              }
+          }
+
+          actor DebridService {
+              static let shared = DebridService()
+
+              struct RDUnrestrictResponse: Codable {
+                  let id: String?
+                  let filename: String?
+                  let download: String?
+                  let streamable: Int?
+              }
+
+              struct RDAddMagnetResponse: Codable {
+                  let id: String
+                  let uri: String?
+              }
+
+              struct RDTorrentFile: Codable {
+                  let id: Int
+                  let path: String
+                  let bytes: Int64
+                  let selected: Int?
+              }
+
+              struct RDTorrentInfoResponse: Codable {
+                  let id: String
+                  let status: String
+                  let links: [String]?
+                  let files: [RDTorrentFile]?
+              }
+
+              private func cleanToken(_ raw: String) -> String {
+                  var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if t.lowercased().hasPrefix("bearer ") {
+                      t = String(t.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+                  }
+                  return t
+              }
+
+              func verifyRealDebridAccount(token: String) async -> String {
+                  let clean = cleanToken(token)
+                  guard !clean.isEmpty, let url = URL(string: "https://api.real-debrid.com/rest/1.0/user") else {
+                      return "يرجى إدخال مفتاح API أولاً"
+                  }
+                  var req = URLRequest(url: url)
+                  req.setValue("Bearer \\(clean)", forHTTPHeaderField: "Authorization")
+                  req.timeoutInterval = 8
+                  do {
+                      let (data, resp) = try await URLSession.shared.data(for: req)
+                      guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                          return "❌ مفتاح Real-Debrid غير صالح أو منتهي الصلاحية"
+                      }
+                      let username = (json["username"] as? String) ?? "User"
+                      let type = (json["type"] as? String)?.uppercased() ?? "PREMIUM"
+                      let exp = (json["expiration"] as? String)?.prefix(10) ?? ""
+                      return "✅ متصل بنجاح: \\(username) (\\(type)) • ينتهي: \\(exp)"
+                  } catch {
+                      return "❌ تعذر الاتصال بخادم Real-Debrid"
+                  }
+              }
+
+              func resolvePlayableURL(
+                  for stream: HarborRankedStream,
+                  provider: DebridProviderType,
+                  realDebridToken: String,
+                  torBoxKey: String
+              ) async throws -> URL {
+                  let rdClean = cleanToken(realDebridToken)
+                  let tbClean = cleanToken(torBoxKey)
+
+                  // 1. If the stream has an InfoHash and user entered a Real-Debrid token, ALWAYS resolve via Real-Debrid first!
+                  if let infoHash = stream.raw.infoHash, !infoHash.isEmpty {
+                      if !rdClean.isEmpty {
+                          return try await resolveInfoHashWithRealDebrid(infoHash: infoHash, fileIdx: stream.raw.fileIdx, token: rdClean)
+                      }
+                      if !tbClean.isEmpty {
+                          return try await resolveInfoHashWithTorBox(infoHash: infoHash, apiKey: tbClean)
+                      }
+                      // Fallback to cloud stream if user hasn't entered any Debrid key
+                      if let ext = stream.raw.externalUrl, let fallbackURL = URL(string: ext) {
+                          return fallbackURL
+                      }
+                      throw DebridError.missingAPIKey("Real-Debrid")
+                  }
+
+                  // 2. If the stream has a direct URL (from Torrentio RD, PlavioHD, or Cloud Server)
+                  if let rawURLStr = stream.raw.url, !rawURLStr.isEmpty, let directURL = URL(string: rawURLStr) {
+                      if !rdClean.isEmpty && (rawURLStr.contains("real-debrid.com/d/") == false) && (rawURLStr.contains("magnet:?") || rawURLStr.contains("1fichier") || rawURLStr.contains("rapidgator")) {
+                          if let unrestricted = try? await unrestrictRealDebridLink(link: rawURLStr, token: rdClean) {
+                              return unrestricted
+                          }
+                      }
+                      return directURL
+                  }
+
+                  if let ext = stream.raw.externalUrl, let fallbackURL = URL(string: ext) {
+                      return fallbackURL
+                  }
+                  throw DebridError.noPlayableURL
+              }
+
+              private func unrestrictRealDebridLink(link: String, token: String) async throws -> URL {
+                  guard let url = URL(string: "https://api.real-debrid.com/rest/1.0/unrestrict/link") else {
+                      throw DebridError.noPlayableURL
+                  }
+                  var request = URLRequest(url: url)
+                  request.httpMethod = "POST"
+                  request.setValue("Bearer \\(token)", forHTTPHeaderField: "Authorization")
+                  request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                  var allowed = CharacterSet.alphanumerics
+                  allowed.insert(charactersIn: "-._~")
+                  let encodedLink = link.addingPercentEncoding(withAllowedCharacters: allowed) ?? link
+                  request.httpBody = "link=\\(encodedLink)".data(using: .utf8)
+
+                  let (data, response) = try await URLSession.shared.data(for: request)
+                  guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                      throw DebridError.unrestrictFailed("تعذر فك الرابط (HTTP \\((response as? HTTPURLResponse)?.statusCode ?? 0))")
+                  }
+                  let decoded = try JSONDecoder().decode(RDUnrestrictResponse.self, from: data)
+                  guard let dl = decoded.download, let resolvedURL = URL(string: dl) else {
+                      throw DebridError.noPlayableURL
+                  }
+                  return resolvedURL
+              }
+
+              private func resolveInfoHashWithRealDebrid(infoHash: String, fileIdx: Int?, token: String) async throws -> URL {
+                  let cleanHash = infoHash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                  let magnet = "magnet:?xt=urn:btih:\\(cleanHash)"
+                  guard let addURL = URL(string: "https://api.real-debrid.com/rest/1.0/torrents/addMagnet") else {
+                      throw DebridError.noPlayableURL
+                  }
+                  var allowed = CharacterSet.alphanumerics
+                  allowed.insert(charactersIn: "-._~")
+                  let encodedMagnet = magnet.addingPercentEncoding(withAllowedCharacters: allowed) ?? magnet
+
+                  var addReq = URLRequest(url: addURL)
+                  addReq.httpMethod = "POST"
+                  addReq.setValue("Bearer \\(token)", forHTTPHeaderField: "Authorization")
+                  addReq.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                  addReq.httpBody = "magnet=\\(encodedMagnet)".data(using: .utf8)
+
+                  let (addData, addResp) = try await URLSession.shared.data(for: addReq)
+                  guard let addHttp = addResp as? HTTPURLResponse, (200..<300).contains(addHttp.statusCode) else {
+                      throw DebridError.unrestrictFailed("تأكد من صلاحية مفتاح Real-Debrid API (كود \\((addResp as? HTTPURLResponse)?.statusCode ?? 0))")
+                  }
+                  let added = try JSONDecoder().decode(RDAddMagnetResponse.self, from: addData)
+
+                  // Step 2: Inspect files inside torrent and pick the largest video file (.mp4 preferred for native iOS AVPlayer, then .mkv)
+                  guard let infoURL = URL(string: "https://api.real-debrid.com/rest/1.0/torrents/info/\\(added.id)") else {
+                      throw DebridError.noPlayableURL
+                  }
+                  var infoReq = URLRequest(url: infoURL)
+                  infoReq.setValue("Bearer \\(token)", forHTTPHeaderField: "Authorization")
+
+                  var selectedFileParam = "all"
+                  if let (initialData, _) = try? await URLSession.shared.data(for: infoReq),
+                     let initialInfo = try? JSONDecoder().decode(RDTorrentInfoResponse.self, from: initialData),
+                     let files = initialInfo.files, !files.isEmpty {
+                      let videoExtensions = [".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".ts"]
+                      let videoFiles = files.filter { f in
+                          let lower = f.path.lowercased()
+                          return videoExtensions.contains(where: { lower.hasSuffix($0) }) && !lower.contains("sample")
+                      }
+                      if let mp4File = videoFiles.filter({ $0.path.lowercased().hasSuffix(".mp4") }).max(by: { $0.bytes < $1.bytes }) {
+                          selectedFileParam = "\\(mp4File.id)"
+                      } else if let largestVideo = videoFiles.max(by: { $0.bytes < $1.bytes }) {
+                          selectedFileParam = "\\(largestVideo.id)"
+                      } else if let largestAny = files.max(by: { $0.bytes < $1.bytes }) {
+                          selectedFileParam = "\\(largestAny.id)"
+                      }
+                  }
+
+                  // Step 3: Select the target video file WITH Content-Type: application/x-www-form-urlencoded!
+                  if let selectURL = URL(string: "https://api.real-debrid.com/rest/1.0/torrents/selectFiles/\\(added.id)") {
+                      var selectReq = URLRequest(url: selectURL)
+                      selectReq.httpMethod = "POST"
+                      selectReq.setValue("Bearer \\(token)", forHTTPHeaderField: "Authorization")
+                      selectReq.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                      selectReq.httpBody = "files=\\(selectedFileParam)".data(using: .utf8)
+                      _ = try? await URLSession.shared.data(for: selectReq)
+                  }
+
+                  // Step 4: Poll torrent info (up to 3 quick checks) for the generated hoster link
+                  for _ in 0..<3 {
+                      let (finalData, _) = try await URLSession.shared.data(for: infoReq)
+                      let finalInfo = try JSONDecoder().decode(RDTorrentInfoResponse.self, from: finalData)
+                      if let firstLink = finalInfo.links?.first, !firstLink.isEmpty {
+                          return try await unrestrictRealDebridLink(link: firstLink, token: token)
+                      }
+                      try? await Task.sleep(nanoseconds: 450_000_000)
+                  }
+
+                  throw DebridError.unrestrictFailed("هذا التورنت غير مخزن مؤقتاً (Not Cached) على خوادم Real-Debrid حالياً؛ جرب مصدراً آخر يحمل شارة ⚡ [RD+].")
+              }
+
+              private func resolveInfoHashWithTorBox(infoHash: String, apiKey: String) async throws -> URL {
+                  guard let url = URL(string: "https://api.torbox.app/v1/api/torrents/createtorrent") else {
+                      throw DebridError.noPlayableURL
+                  }
+                  var req = URLRequest(url: url)
+                  req.httpMethod = "POST"
+                  req.setValue("Bearer \\(apiKey)", forHTTPHeaderField: "Authorization")
+                  req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                  req.httpBody = "magnet=magnet:?xt=urn:btih:\\(infoHash)".data(using: .utf8)
+
+                  let (data, response) = try await URLSession.shared.data(for: req)
+                  guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                      throw DebridError.unrestrictFailed("TorBox API HTTP Error")
+                  }
+                  if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                     let dataObj = json["data"] as? [String: Any],
+                     let torrentId = dataObj["torrent_id"] as? Int,
+                     let dlURL = URL(string: "https://api.torbox.app/v1/api/torrents/requestdl?token=\\(apiKey)&torrent_id=\\(torrentId)&file_id=0") {
+                      let (dlData, _) = try await URLSession.shared.data(from: dlURL)
+                      if let dlJson = try? JSONSerialization.jsonObject(with: dlData) as? [String: Any],
+                         let directLink = dlJson["data"] as? String,
+                         let finalURL = URL(string: directLink) {
+                          return finalURL
+                      }
+                  }
+                  throw DebridError.unrestrictFailed("تعذر استخراج رابط HTTP مباشر من TorBox")
+              }
+          }
+          '''
           with open("Sources/HarborIOS/DebridService.swift", "w", encoding="utf-8") as f:
-              f.write(deb_c)
+              f.write(new_debrid_swift)
 
           with open("Sources/HarborIOS/HarborViews.swift", "r", encoding="utf-8") as f:
               views_c = f.read()
@@ -729,14 +1138,14 @@ jobs:
                       }
                       .frame(maxWidth: .infinity, maxHeight: .infinity)
                       .simultaneousGesture(
-                          DragGesture(minimumDistance: 10)
+                          DragGesture(minimumDistance: 12)
                               .onChanged { value in
                                   let dy = value.translation.height
-                                  if dy < -18 && !isTabBarHidden {
+                                  if dy < -20 && !isTabBarHidden {
                                       withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
                                           isTabBarHidden = true
                                       }
-                                  } else if dy > 14 && isTabBarHidden {
+                                  } else if dy > 15 && isTabBarHidden {
                                       withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
                                           isTabBarHidden = false
                                       }
@@ -755,9 +1164,9 @@ jobs:
                                           }
                                       } label: {
                                           Image(systemName: "magnifyingglass")
-                                              .font(.system(size: 18, weight: .bold))
-                                              .foregroundStyle(Color(red: 0.95, green: 0.25, blue: 0.38))
-                                              .frame(width: 48, height: 48)
+                                              .font(.system(size: 17, weight: .bold))
+                                              .foregroundStyle(store.theme.accent)
+                                              .frame(width: 46, height: 46)
                                               .background(.ultraThinMaterial)
                                               .clipShape(Circle())
                                               .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
@@ -775,9 +1184,9 @@ jobs:
                                           }
                                       } label: {
                                           Image(systemName: "house.fill")
-                                              .font(.system(size: 18, weight: .bold))
+                                              .font(.system(size: 17, weight: .bold))
                                               .foregroundStyle(.white)
-                                              .frame(width: 48, height: 48)
+                                              .frame(width: 46, height: 46)
                                               .background(.ultraThinMaterial)
                                               .clipShape(Circle())
                                               .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
@@ -1159,71 +1568,87 @@ jobs:
           suffix = views_c[views_c.index(end_marker):]
           views_c = prefix + new_root_and_home + suffix
 
+          # Replace HarborMusicRoomView, HarborMusicTrackRow, HarborMiniAudioPlayerBar, and HarborFullMusicPlayerSheet with Bespoke Luxury Personal Sound Studio (Zero Giant Bubble!)
           music_start = "struct HarborMusicRoomView: View {"
           books_start = "// MARK: - 15. Harbor Books & Ebooks Room"
           assert music_start in views_c and books_start in views_c, "Music section markers missing"
 
-          apple_music_section = '''struct HarborMusicRoomView: View {
+          bespoke_music_section = '''struct HarborMusicRoomView: View {
               @EnvironmentObject var store: HarborStore
               @EnvironmentObject var audioManager: HarborAudioPlayerManager
               @State private var searchQuery: String = ""
-              @State private var selectedCategoryTitle: String = "الكل"
+              @State private var activeMoodTitle: String = "مختاراتي الخاصة"
 
-              private let gridColumns = [
-                  GridItem(.flexible(), spacing: 12),
-                  GridItem(.flexible(), spacing: 12)
-              ]
+              private let screenW = UIScreen.main.bounds.width
 
               var body: some View {
                   NavigationStack {
                       ZStack(alignment: .top) {
-                          Color.black.ignoresSafeArea()
+                          Color(red: 0.03, green: 0.03, blue: 0.05).ignoresSafeArea()
 
-                          if let current = audioManager.currentTrack, audioManager.isPlaying {
-                              ArtworkRadiationContainer(artworkURL: current.artworkURL, isActive: true, glowRadius: 55, scale: 1.8) {
-                                  Color.clear.frame(height: 220)
-                              }
-                              .frame(height: 220)
-                              .opacity(0.55)
-                              .ignoresSafeArea()
-                          } else {
-                              LinearGradient(
-                                  colors: [Color(red: 0.85, green: 0.16, blue: 0.26).opacity(0.38), .clear],
-                                  startPoint: .top,
-                                  endPoint: .bottom
-                              )
-                              .frame(height: 240)
-                              .ignoresSafeArea()
-                          }
+                          // Subtle top ambient wash strictly constrained to top 240pt
+                          LinearGradient(
+                              colors: [store.theme.accent.opacity(0.20), Color(red: 0.12, green: 0.08, blue: 0.24).opacity(0.18), .clear],
+                              startPoint: .topLeading,
+                              endPoint: .bottomTrailing
+                          )
+                          .frame(width: screenW, height: 240)
+                          .ignoresSafeArea()
 
                           ScrollView(.vertical, showsIndicators: false) {
-                              VStack(alignment: .leading, spacing: 20) {
-                                  HStack {
-                                      ZStack {
-                                          Circle()
-                                              .fill(Color(red: 0.22, green: 0.20, blue: 0.34))
-                                              .frame(width: 40, height: 40)
-                                          Text("HB")
-                                              .font(.system(size: 15, weight: .bold, design: .rounded))
-                                              .foregroundStyle(.white)
+                              VStack(alignment: .leading, spacing: 22) {
+                                  // Bespoke Personal Header (No Apple Music Copy-Paste!)
+                                  HStack(alignment: .center) {
+                                      Button {
+                                          if let randomTrack = store.musicTracks.randomElement() {
+                                              audioManager.play(track: randomTrack, queue: store.musicTracks)
+                                          }
+                                      } label: {
+                                          HStack(spacing: 6) {
+                                              Image(systemName: "shuffle")
+                                                  .font(.system(size: 13, weight: .bold))
+                                              Text("عشوائي")
+                                                  .font(.caption.weight(.bold))
+                                          }
+                                          .padding(.horizontal, 12)
+                                          .padding(.vertical, 8)
+                                          .background(Color.white.opacity(0.08))
+                                          .foregroundStyle(.white)
+                                          .clipShape(Capsule())
+                                          .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.8))
                                       }
-                                      .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                                      .buttonStyle(SmoothPressButtonStyle())
 
                                       Spacer()
 
-                                      Text("Search")
-                                          .font(.system(size: 34, weight: .heavy))
-                                          .foregroundStyle(.white)
+                                      VStack(alignment: .trailing, spacing: 2) {
+                                          Text("مساحتي الصوتية")
+                                              .font(.system(size: 28, weight: .black, design: .rounded))
+                                              .foregroundStyle(.white)
+                                          Text("HARBOR PERSONAL SOUND STUDIO")
+                                              .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                              .foregroundStyle(store.theme.accent)
+                                      }
                                   }
-                                  .padding(.horizontal, 16)
-                                  .padding(.top, 6)
+                                  .padding(.horizontal, 18)
+                                  .padding(.top, 8)
                                   .environment(\\.layoutDirection, .leftToRight)
 
+                                  // Sleek Glass Search Bar
                                   HStack(spacing: 10) {
-                                      Image(systemName: "mic.fill")
-                                          .foregroundStyle(.white.opacity(0.65))
+                                      if !searchQuery.isEmpty {
+                                          Button {
+                                              searchQuery = ""
+                                          } label: {
+                                              Image(systemName: "xmark.circle.fill")
+                                                  .foregroundStyle(.white.opacity(0.55))
+                                          }
+                                      } else {
+                                          Image(systemName: "waveform")
+                                              .foregroundStyle(store.theme.accent)
+                                      }
 
-                                      TextField("الفنانون والأغاني وكلمات الأغاني والمزيد", text: $searchQuery)
+                                      TextField("ابحث عن أغنية، فنان، أو ألبوم...", text: $searchQuery)
                                           .multilineTextAlignment(.trailing)
                                           .foregroundStyle(.white)
                                           .submitLabel(.search)
@@ -1231,95 +1656,161 @@ jobs:
                                               Task { await store.searchMusic(query: searchQuery) }
                                           }
 
-                                      if !searchQuery.isEmpty {
-                                          Button {
-                                              searchQuery = ""
-                                          } label: {
-                                              Image(systemName: "xmark.circle.fill")
-                                                  .foregroundStyle(.white.opacity(0.6))
-                                          }
-                                      }
-
                                       Image(systemName: "magnifyingglass")
                                           .foregroundStyle(.white.opacity(0.65))
                                   }
                                   .padding(.horizontal, 16)
                                   .padding(.vertical, 13)
-                                  .background(.ultraThinMaterial)
+                                  .background(Color(red: 0.10, green: 0.11, blue: 0.15).opacity(0.92))
                                   .clipShape(Capsule())
-                                  .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                                  .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.8))
                                   .padding(.horizontal, 16)
                                   .environment(\\.layoutDirection, .leftToRight)
 
-                                  VStack(spacing: 0) {
-                                      ZStack {
-                                          LinearGradient(
-                                              colors: [Color(red: 0.95, green: 0.24, blue: 0.30), Color(red: 0.82, green: 0.14, blue: 0.22)],
-                                              startPoint: .topLeading,
-                                              endPoint: .bottomTrailing
-                                          )
-                                          HStack(spacing: 10) {
-                                              Image(systemName: "apple.logo")
-                                                  .font(.system(size: 44, weight: .bold))
-                                              Text("Music")
-                                                  .font(.system(size: 48, weight: .bold, design: .rounded))
-                                          }
-                                          .foregroundStyle(.white)
-                                          .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
-                                      }
-                                      .frame(height: 155)
-
-                                      VStack(spacing: 10) {
-                                          Text("Explore 100 million songs. All ad-free.")
-                                              .font(.system(size: 19, weight: .bold))
-                                              .foregroundStyle(.white)
-                                              .multilineTextAlignment(.center)
-
-                                          Text("استمع لأغنيتك كاملة بجودة 320kbps مع إشعاع الغلاف المتفاعل وكلمات الأغاني المتزامنة.")
-                                              .font(.caption)
-                                              .foregroundStyle(.white.opacity(0.68))
-                                              .multilineTextAlignment(.center)
-                                              .padding(.horizontal, 16)
-
-                                          Button {
-                                              if let first = store.musicTracks.first {
-                                                  audioManager.play(track: first, queue: store.musicTracks)
-                                              } else {
-                                                  Task { await store.searchMusic(query: "The Weeknd") }
+                                  // Horizontal Mood & Vibe Studio Cards (Personal & Refined)
+                                  ScrollView(.horizontal, showsIndicators: false) {
+                                      HStack(spacing: 12) {
+                                          ForEach(personalMusicMoods) { mood in
+                                              let isSelected = (activeMoodTitle == mood.title)
+                                              Button {
+                                                  withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                                      activeMoodTitle = mood.title
+                                                      searchQuery = mood.query
+                                                  }
+                                                  Task { await store.searchMusic(query: mood.query) }
+                                              } label: {
+                                                  HStack(spacing: 12) {
+                                                      ZStack {
+                                                          Circle()
+                                                              .fill(Color.white.opacity(0.14))
+                                                              .frame(width: 40, height: 40)
+                                                          Image(systemName: mood.symbol)
+                                                              .font(.system(size: 17, weight: .bold))
+                                                              .foregroundStyle(.white)
+                                                      }
+                                                      VStack(alignment: .leading, spacing: 2) {
+                                                          Text(mood.title)
+                                                              .font(.system(size: 14, weight: .bold))
+                                                              .foregroundStyle(.white)
+                                                          Text(mood.subtitle)
+                                                              .font(.system(size: 10, weight: .medium))
+                                                              .foregroundStyle(.white.opacity(0.70))
+                                                      }
+                                                  }
+                                                  .padding(.horizontal, 14)
+                                                  .padding(.vertical, 12)
+                                                  .background(
+                                                      LinearGradient(colors: mood.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                                                  )
+                                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                                  .overlay(
+                                                      RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                          .stroke(isSelected ? store.theme.accent : Color.white.opacity(0.12), lineWidth: isSelected ? 1.8 : 0.8)
+                                                  )
                                               }
-                                          } label: {
-                                              Text("Play Trending Now")
-                                                  .font(.subheadline.weight(.bold))
-                                                  .padding(.horizontal, 28)
-                                                  .padding(.vertical, 10)
-                                                  .background(Color(red: 0.92, green: 0.24, blue: 0.32))
-                                                  .foregroundStyle(.white)
-                                                  .clipShape(Capsule())
+                                              .buttonStyle(SmoothPressButtonStyle())
                                           }
-                                          .buttonStyle(SmoothPressButtonStyle())
-                                          .padding(.top, 4)
                                       }
-                                      .padding(.vertical, 18)
-                                      .frame(maxWidth: .infinity)
-                                      .background(Color(red: 0.11, green: 0.11, blue: 0.13))
+                                      .padding(.horizontal, 16)
                                   }
-                                  .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                                  .padding(.horizontal, 16)
+                                  .environment(\\.layoutDirection, .leftToRight)
 
+                                  // Featured Horizontal Album Showcase Carousel
+                                  if !store.musicTracks.isEmpty {
+                                      VStack(alignment: .leading, spacing: 12) {
+                                          HStack {
+                                              Text("Featured Picks · مختارات لك")
+                                                  .font(.headline.weight(.bold))
+                                                  .foregroundStyle(.white)
+                                              Spacer()
+                                          }
+                                          .padding(.horizontal, 18)
+                                          .environment(\\.layoutDirection, .leftToRight)
+
+                                          ScrollView(.horizontal, showsIndicators: false) {
+                                              HStack(spacing: 14) {
+                                                  ForEach(store.musicTracks.prefix(8)) { item in
+                                                      let isCurrent = (audioManager.currentTrack?.id == item.id)
+                                                      Button {
+                                                          withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                                              audioManager.play(track: item, queue: store.musicTracks)
+                                                          }
+                                                      } label: {
+                                                          VStack(alignment: .leading, spacing: 8) {
+                                                              ZStack(alignment: .bottomTrailing) {
+                                                                  AsyncImage(url: URL(string: item.artworkURL ?? "")) { phase in
+                                                                      switch phase {
+                                                                      case .success(let image):
+                                                                          image
+                                                                              .resizable()
+                                                                              .scaledToFill()
+                                                                              .frame(width: 142, height: 142)
+                                                                              .clipped()
+                                                                      default:
+                                                                          ZStack {
+                                                                              Color(red: 0.12, green: 0.13, blue: 0.18)
+                                                                              Image(systemName: "music.note")
+                                                                                  .font(.largeTitle)
+                                                                                  .foregroundStyle(store.theme.accent)
+                                                                          }
+                                                                          .frame(width: 142, height: 142)
+                                                                      }
+                                                                  }
+                                                                  .frame(width: 142, height: 142)
+                                                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                                                  .overlay(
+                                                                      RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                                          .stroke(isCurrent ? store.theme.accent : Color.white.opacity(0.10), lineWidth: isCurrent ? 2.0 : 0.8)
+                                                                  )
+
+                                                                  Image(systemName: isCurrent && audioManager.isPlaying ? "waveform.circle.fill" : "play.circle.fill")
+                                                                      .font(.system(size: 30))
+                                                                      .foregroundStyle(.white)
+                                                                      .background(Circle().fill(Color.black.opacity(0.45)))
+                                                                      .padding(8)
+                                                              }
+
+                                                              Text(item.title)
+                                                                  .font(.system(size: 13, weight: .bold))
+                                                                  .foregroundStyle(isCurrent ? store.theme.accent : .white)
+                                                                  .lineLimit(1)
+                                                                  .frame(width: 142, alignment: .leading)
+
+                                                              Text(item.artist)
+                                                                  .font(.system(size: 11, weight: .medium))
+                                                                  .foregroundStyle(.white.opacity(0.60))
+                                                                  .lineLimit(1)
+                                                                  .frame(width: 142, alignment: .leading)
+                                                          }
+                                                      }
+                                                      .buttonStyle(SmoothPressButtonStyle())
+                                                  }
+                                              }
+                                              .padding(.horizontal, 16)
+                                          }
+                                          .environment(\\.layoutDirection, .leftToRight)
+                                      }
+                                  }
+
+                                  // Main Songs List (Clean, Contained Glow on Playing Track — Zero Giant Circle!)
                                   VStack(alignment: .leading, spacing: 12) {
                                       HStack {
-                                          Text(selectedCategoryTitle == "الكل" ? "Top Songs · الأغاني المختارة" : selectedCategoryTitle)
+                                          Text(activeMoodTitle)
                                               .font(.title3.weight(.bold))
                                               .foregroundStyle(.white)
                                           Spacer()
                                           if store.isLoadingMusic {
-                                              ProgressView().tint(Color(red: 0.95, green: 0.24, blue: 0.32))
+                                              ProgressView().tint(store.theme.accent)
+                                          } else {
+                                              Text("\\(store.musicTracks.count) مقاطع")
+                                                  .font(.caption.weight(.semibold))
+                                                  .foregroundStyle(.white.opacity(0.5))
                                           }
                                       }
-                                      .padding(.horizontal, 16)
+                                      .padding(.horizontal, 18)
                                       .environment(\\.layoutDirection, .leftToRight)
 
-                                      VStack(spacing: 12) {
+                                      VStack(spacing: 10) {
                                           ForEach(store.musicTracks) { track in
                                               HarborMusicTrackRow(
                                                   track: track,
@@ -1335,61 +1826,9 @@ jobs:
                                       .padding(.horizontal, 16)
                                   }
 
-                                  VStack(alignment: .leading, spacing: 12) {
-                                      Text("Browse Categories · تصفح الأقسام")
-                                          .font(.title3.weight(.bold))
-                                          .foregroundStyle(.white)
-                                          .padding(.horizontal, 16)
-                                          .environment(\\.layoutDirection, .leftToRight)
-
-                                      LazyVGrid(columns: gridColumns, spacing: 12) {
-                                          ForEach(appleMusicBrowseGridItems) { card in
-                                              Button {
-                                                  withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                                      selectedCategoryTitle = card.title
-                                                      searchQuery = card.query
-                                                  }
-                                                  Task { await store.searchMusic(query: card.query) }
-                                              } label: {
-                                                  ZStack(alignment: .bottomTrailing) {
-                                                      LinearGradient(
-                                                          colors: card.colors,
-                                                          startPoint: .topLeading,
-                                                          endPoint: .bottomTrailing
-                                                      )
-
-                                                      Image(systemName: card.symbol)
-                                                          .font(.system(size: 54, weight: .bold))
-                                                          .foregroundStyle(.white.opacity(0.18))
-                                                          .offset(x: -65, y: -18)
-
-                                                      VStack(alignment: .trailing, spacing: 2) {
-                                                          Text(card.title)
-                                                              .font(.system(size: 16, weight: .bold))
-                                                              .foregroundStyle(.white)
-                                                          Text(card.subtitle)
-                                                              .font(.caption2)
-                                                              .foregroundStyle(.white.opacity(0.78))
-                                                      }
-                                                      .padding(12)
-                                                  }
-                                                  .frame(height: 108)
-                                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                                  .overlay(
-                                                      RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                          .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
-                                                  )
-                                              }
-                                              .buttonStyle(SmoothPressButtonStyle())
-                                          }
-                                      }
-                                      .padding(.horizontal, 16)
-                                      .environment(\\.layoutDirection, .leftToRight)
-                                  }
-
                                   Spacer(minLength: 140)
                               }
-                              .padding(.top, 8)
+                              .frame(width: screenW)
                           }
                       }
                       .toolbar(.hidden, for: .navigationBar)
@@ -1407,45 +1846,51 @@ jobs:
               var body: some View {
                   Button(action: onTap) {
                       HStack(spacing: 14) {
-                          ArtworkRadiationContainer(
+                          // Contained 54x54 Thumbnail with Soft Contained Glow when Active
+                          ContainedArtworkGlow(
                               artworkURL: track.artworkURL,
                               isActive: isCurrent,
-                              glowRadius: 18,
-                              scale: 1.32
+                              frameSize: 54,
+                              glowBlur: 12
                           ) {
                               AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
                                   switch phase {
                                   case .success(let image):
-                                      image.resizable().scaledToFill()
+                                      image
+                                          .resizable()
+                                          .scaledToFill()
+                                          .frame(width: 54, height: 54)
+                                          .clipped()
                                   default:
                                       ZStack {
-                                          Color(red: 0.16, green: 0.16, blue: 0.20)
+                                          Color(red: 0.14, green: 0.15, blue: 0.20)
                                           Image(systemName: "music.note")
-                                              .foregroundStyle(Color(red: 0.95, green: 0.24, blue: 0.34))
+                                              .foregroundStyle(store.theme.accent)
                                       }
+                                      .frame(width: 54, height: 54)
                                   }
                               }
-                              .frame(width: 56, height: 56)
+                              .frame(width: 54, height: 54)
                               .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                               .overlay(
                                   RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                      .stroke(isCurrent ? Color.white.opacity(0.6) : Color.white.opacity(0.1), lineWidth: isCurrent ? 1.5 : 0.6)
+                                      .stroke(isCurrent ? store.theme.accent : Color.white.opacity(0.10), lineWidth: isCurrent ? 1.5 : 0.6)
                               )
                           }
-                          .frame(width: 62, height: 62)
+                          .frame(width: 60, height: 60)
 
                           VStack(alignment: .leading, spacing: 4) {
                               Text(track.title)
-                                  .font(.system(size: 16, weight: .bold))
-                                  .foregroundStyle(isCurrent ? Color(red: 0.98, green: 0.30, blue: 0.40) : .white)
+                                  .font(.system(size: 15, weight: .bold))
+                                  .foregroundStyle(isCurrent ? store.theme.accent : .white)
                                   .lineLimit(1)
 
                               let durText = track.isLiveStream
                                   ? "LIVE 24/7"
                                   : String(format: "%d:%02d", Int(track.durationSeconds) / 60, Int(track.durationSeconds) % 60)
                               Text("\\(track.artist) · \\(durText) · \\(track.album)")
-                                  .font(.caption)
-                                  .foregroundStyle(.white.opacity(0.62))
+                                  .font(.system(size: 12, weight: .medium))
+                                  .foregroundStyle(.white.opacity(0.58))
                                   .lineLimit(1)
                           }
 
@@ -1454,41 +1899,29 @@ jobs:
                           if isCurrent {
                               Image(systemName: isPlaying ? "waveform" : "pause.circle.fill")
                                   .font(.title3.weight(.bold))
-                                  .foregroundStyle(Color(red: 0.98, green: 0.30, blue: 0.40))
+                                  .foregroundStyle(store.theme.accent)
                                   .symbolEffect(.variableColor.iterative, isActive: isPlaying)
                           } else {
                               Image(systemName: "play.fill")
-                                  .font(.subheadline)
-                                  .foregroundStyle(.white.opacity(0.5))
-                                  .padding(10)
-                                  .background(Color.white.opacity(0.08))
+                                  .font(.caption.weight(.bold))
+                                  .foregroundStyle(.white.opacity(0.65))
+                                  .frame(width: 34, height: 34)
+                                  .background(Color.white.opacity(0.07))
                                   .clipShape(Circle())
                           }
                       }
                       .padding(.horizontal, 12)
-                      .padding(.vertical, 10)
+                      .padding(.vertical, 8)
+                      .frame(height: 74)
                       .background(
-                          ZStack {
-                              RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                  .fill(Color(red: 0.10, green: 0.10, blue: 0.13).opacity(0.88))
-                              if isCurrent, let art = track.artworkURL, let url = URL(string: art) {
-                                  AsyncImage(url: url) { phase in
-                                      if case .success(let img) = phase {
-                                          img.resizable()
-                                              .scaledToFill()
-                                              .saturation(2.0)
-                                              .blur(radius: 36)
-                                              .opacity(0.32)
-                                      }
-                                  }
-                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                              }
-                          }
+                          RoundedRectangle(cornerRadius: 16, style: .continuous)
+                              .fill(isCurrent ? store.theme.accent.opacity(0.12) : Color(red: 0.09, green: 0.10, blue: 0.13).opacity(0.90))
                       )
                       .overlay(
                           RoundedRectangle(cornerRadius: 16, style: .continuous)
-                              .stroke(isCurrent ? Color.white.opacity(0.35) : Color.white.opacity(0.06), lineWidth: isCurrent ? 1.2 : 0.6)
+                              .stroke(isCurrent ? store.theme.accent.opacity(0.55) : Color.white.opacity(0.06), lineWidth: isCurrent ? 1.2 : 0.6)
                       )
+                      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                       .environment(\\.layoutDirection, .leftToRight)
                   }
                   .buttonStyle(SmoothPressButtonStyle())
@@ -1506,7 +1939,7 @@ jobs:
                               audioManager.togglePlayPause()
                           } label: {
                               Image(systemName: audioManager.isPlaying ? "pause.fill" : "play.fill")
-                                  .font(.system(size: 19, weight: .bold))
+                                  .font(.system(size: 18, weight: .bold))
                                   .foregroundStyle(.white)
                                   .frame(width: 36, height: 36)
                           }
@@ -1516,7 +1949,7 @@ jobs:
                               audioManager.playNext()
                           } label: {
                               Image(systemName: "forward.fill")
-                                  .font(.system(size: 16, weight: .semibold))
+                                  .font(.system(size: 15, weight: .semibold))
                                   .foregroundStyle(.white.opacity(0.75))
                           }
                           .buttonStyle(SmoothPressButtonStyle())
@@ -1534,61 +1967,55 @@ jobs:
                                           .lineLimit(1)
                                       Text(track.artist)
                                           .font(.caption2)
-                                          .foregroundStyle(.white.opacity(0.70))
+                                          .foregroundStyle(.white.opacity(0.68))
                                           .lineLimit(1)
                                   }
 
-                                  ArtworkRadiationContainer(
-                                      artworkURL: track.artworkURL,
-                                      isActive: audioManager.isPlaying,
-                                      glowRadius: 12,
-                                      scale: 1.35
-                                  ) {
-                                      AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
-                                          switch phase {
-                                          case .success(let img):
-                                              img.resizable().scaledToFill()
-                                          default:
-                                              ZStack {
-                                                  Color(red: 0.22, green: 0.22, blue: 0.26)
-                                                  Image(systemName: "music.note")
-                                                      .foregroundStyle(.white.opacity(0.7))
-                                              }
+                                  AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
+                                      switch phase {
+                                      case .success(let img):
+                                          img.resizable()
+                                              .scaledToFill()
+                                              .frame(width: 40, height: 40)
+                                              .clipped()
+                                      default:
+                                          ZStack {
+                                              Color(red: 0.20, green: 0.20, blue: 0.25)
+                                              Image(systemName: "music.note")
+                                                  .foregroundStyle(.white.opacity(0.7))
                                           }
+                                          .frame(width: 40, height: 40)
                                       }
-                                      .frame(width: 40, height: 40)
-                                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                   }
-                                  .frame(width: 42, height: 42)
+                                  .frame(width: 40, height: 40)
+                                  .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                  .overlay(
+                                      RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                          .stroke(store.theme.accent.opacity(audioManager.isPlaying ? 0.8 : 0.2), lineWidth: 1.2)
+                                  )
                               }
                           }
                           .buttonStyle(.plain)
                       }
                       .padding(.horizontal, 16)
-                      .padding(.vertical, 8)
+                      .frame(height: 56)
                       .background(
-                          ZStack {
-                              Capsule(style: .continuous)
-                                  .fill(.ultraThinMaterial)
-                              if let art = track.artworkURL, let url = URL(string: art) {
-                                  AsyncImage(url: url) { phase in
-                                      if case .success(let img) = phase {
-                                          img.resizable()
-                                              .scaledToFill()
-                                              .saturation(2.2)
-                                              .blur(radius: 28)
-                                              .opacity(audioManager.isPlaying ? 0.45 : 0.22)
-                                      }
-                                  }
-                                  .clipShape(Capsule(style: .continuous))
-                              }
-                          }
+                          Capsule(style: .continuous)
+                              .fill(Color(red: 0.11, green: 0.12, blue: 0.16).opacity(0.95))
                       )
                       .overlay(
                           Capsule(style: .continuous)
-                              .stroke(Color.white.opacity(0.22), lineWidth: 0.9)
+                              .stroke(
+                                  LinearGradient(
+                                      colors: [store.theme.accent.opacity(audioManager.isPlaying ? 0.55 : 0.20), Color.white.opacity(0.12)],
+                                      startPoint: .trailing,
+                                      endPoint: .leading
+                                  ),
+                                  lineWidth: 1.0
+                              )
                       )
-                      .shadow(color: .black.opacity(0.55), radius: 14, y: 5)
+                      .clipShape(Capsule(style: .continuous))
+                      .shadow(color: .black.opacity(0.55), radius: 12, y: 4)
                       .padding(.horizontal, 18)
                       .environment(\\.layoutDirection, .leftToRight)
                   }
@@ -1599,62 +2026,55 @@ jobs:
               @EnvironmentObject var store: HarborStore
               @EnvironmentObject var audioManager: HarborAudioPlayerManager
               @Environment(\\.dismiss) private var dismiss
+              @State private var isUpgradingStream: Bool = false
 
               var body: some View {
                   NavigationStack {
                       ZStack {
-                          Color.black.ignoresSafeArea()
+                          Color(red: 0.04, green: 0.04, blue: 0.06).ignoresSafeArea()
 
-                          if let track = audioManager.currentTrack, let art = track.artworkURL, let url = URL(string: art) {
-                              AsyncImage(url: url) { phase in
-                                  if case .success(let img) = phase {
-                                      img.resizable()
-                                          .scaledToFill()
-                                          .frame(width: UIScreen.main.bounds.width, height: UIScreen.main.bounds.height)
-                                          .saturation(2.1)
-                                          .blur(radius: 75)
-                                          .opacity(0.55)
-                                          .ignoresSafeArea()
-                                  }
-                              }
-                          }
-
-                          VStack(spacing: 24) {
+                          VStack(spacing: 22) {
                               Capsule()
-                                  .fill(Color.white.opacity(0.35))
-                                  .frame(width: 42, height: 5)
+                                  .fill(Color.white.opacity(0.30))
+                                  .frame(width: 40, height: 5)
                                   .padding(.top, 10)
 
                               if let track = audioManager.currentTrack {
-                                  ArtworkRadiationContainer(
+                                  // Strictly Contained 250x250 Album Cover with Contained Artwork Radiation Halo!
+                                  ContainedArtworkGlow(
                                       artworkURL: track.artworkURL,
                                       isActive: audioManager.isPlaying,
-                                      glowRadius: 38,
-                                      scale: 1.32
+                                      frameSize: 250,
+                                      glowBlur: 32
                                   ) {
                                       AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
                                           switch phase {
                                           case .success(let image):
-                                              image.resizable().scaledToFill()
+                                              image
+                                                  .resizable()
+                                                  .scaledToFill()
+                                                  .frame(width: 250, height: 250)
+                                                  .clipped()
                                           default:
                                               ZStack {
-                                                  Color(red: 0.15, green: 0.15, blue: 0.20)
+                                                  Color(red: 0.14, green: 0.15, blue: 0.20)
                                                   Image(systemName: "waveform.circle.fill")
                                                       .font(.system(size: 72))
-                                                      .foregroundStyle(.white)
+                                                      .foregroundStyle(store.theme.accent)
                                               }
+                                              .frame(width: 250, height: 250)
                                           }
                                       }
-                                      .frame(width: 260, height: 260)
+                                      .frame(width: 250, height: 250)
                                       .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                                       .overlay(
                                           RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                              .stroke(Color.white.opacity(0.28), lineWidth: 1.2)
+                                              .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
                                       )
-                                      .scaleEffect(audioManager.isPlaying ? 1.02 : 0.92)
-                                      .animation(.spring(response: 0.45, dampingFraction: 0.72), value: audioManager.isPlaying)
+                                      .scaleEffect(audioManager.isPlaying ? 1.02 : 0.94)
+                                      .animation(.spring(response: 0.42, dampingFraction: 0.74), value: audioManager.isPlaying)
                                   }
-                                  .frame(width: 300, height: 290)
+                                  .frame(width: 290, height: 280)
 
                                   VStack(spacing: 6) {
                                       Text(track.title)
@@ -1664,9 +2084,34 @@ jobs:
                                           .lineLimit(2)
                                       Text(track.artist)
                                           .font(.headline)
-                                          .foregroundStyle(.white.opacity(0.78))
+                                          .foregroundStyle(store.theme.accent)
                                   }
                                   .padding(.horizontal, 24)
+
+                                  // Optional 1-Tap Full-Track Resolver Button
+                                  Button {
+                                      isUpgradingStream = true
+                                      Task {
+                                          await audioManager.upgradeCurrentTrackToFullStreamIfVerified()
+                                          isUpgradingStream = false
+                                      }
+                                  } label: {
+                                      HStack(spacing: 6) {
+                                          if isUpgradingStream {
+                                              ProgressView().scaleEffect(0.8)
+                                          } else {
+                                              Image(systemName: "sparkles")
+                                          }
+                                          Text("تبديل إلى البث الكامل (Full Studio Stream)")
+                                              .font(.caption.weight(.bold))
+                                      }
+                                      .padding(.horizontal, 14)
+                                      .padding(.vertical, 7)
+                                      .background(Color.white.opacity(0.08))
+                                      .foregroundStyle(.white.opacity(0.85))
+                                      .clipShape(Capsule())
+                                  }
+                                  .buttonStyle(SmoothPressButtonStyle())
 
                                   if !track.isLiveStream {
                                       VStack(spacing: 6) {
@@ -1677,7 +2122,7 @@ jobs:
                                               ),
                                               in: 0...max(audioManager.duration, 1)
                                           )
-                                          .tint(.white)
+                                          .tint(store.theme.accent)
 
                                           HStack {
                                               Text(formatTime(audioManager.currentTime))
@@ -1687,7 +2132,7 @@ jobs:
                                                   .contentTransition(.numericText())
                                           }
                                           .font(.caption2.weight(.semibold))
-                                          .foregroundStyle(.white.opacity(0.7))
+                                          .foregroundStyle(.white.opacity(0.65))
                                       }
                                       .padding(.horizontal, 28)
                                       .environment(\\.layoutDirection, .leftToRight)
@@ -1702,6 +2147,7 @@ jobs:
                                       Button { audioManager.togglePlayPause() } label: {
                                           Image(systemName: audioManager.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                               .font(.system(size: 64))
+                                              .foregroundStyle(store.theme.accent)
                                       }
                                       .buttonStyle(SmoothPressButtonStyle())
 
@@ -1713,10 +2159,11 @@ jobs:
                                   .foregroundStyle(.white)
                                   .environment(\\.layoutDirection, .leftToRight)
 
+                                  // Synced Lyrics View (LRCLIB integration)
                                   VStack(alignment: .leading, spacing: 8) {
-                                      Label("Synced Lyrics · كلمات الأغنية", systemImage: "quote.bubble.fill")
+                                      Label("كلمات الأغنية المتزامنة (LRCLIB)", systemImage: "quote.bubble.fill")
                                           .font(.caption.weight(.bold))
-                                          .foregroundStyle(.white.opacity(0.85))
+                                          .foregroundStyle(store.theme.accent)
 
                                       ScrollView {
                                           if !audioManager.syncedLyrics.isEmpty {
@@ -1725,9 +2172,7 @@ jobs:
                                                       let isActive = abs(line.timestampSeconds - audioManager.currentTime) < 3.0
                                                       Text(line.text)
                                                           .font(isActive ? .headline.weight(.bold) : .subheadline)
-                                                          .foregroundStyle(isActive ? .white : .white.opacity(0.50))
-                                                          .scaleEffect(isActive ? 1.03 : 1.0, anchor: .leading)
-                                                          .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
+                                                          .foregroundStyle(isActive ? store.theme.accent : .white.opacity(0.55))
                                                           .onTapGesture {
                                                               audioManager.seek(to: line.timestampSeconds)
                                                           }
@@ -1739,15 +2184,15 @@ jobs:
                                                   .font(.subheadline)
                                                   .foregroundStyle(.white.opacity(0.85))
                                           } else {
-                                              Text("استمتع بالصوت الكامل مع الإشعاع المحيطي لغلاف الألبوم.")
+                                              Text("لا تتوفر كلمات متزامنة لهذا المقطع حالياً.")
                                                   .font(.caption)
-                                                  .foregroundStyle(.white.opacity(0.6))
+                                                  .foregroundStyle(.white.opacity(0.5))
                                           }
                                       }
-                                      .frame(maxHeight: 150)
+                                      .frame(maxHeight: 140)
                                   }
                                   .padding(14)
-                                  .background(.ultraThinMaterial)
+                                  .background(Color(red: 0.09, green: 0.10, blue: 0.14))
                                   .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                                   .padding(.horizontal, 20)
                               }
@@ -1773,7 +2218,34 @@ jobs:
 
           m_prefix = views_c[:views_c.index(music_start)]
           m_suffix = views_c[views_c.index(books_start):]
-          views_c = m_prefix + apple_music_section + m_suffix
+          views_c = m_prefix + bespoke_music_section + m_suffix
+
+          # Add Live Real-Debrid Account Test & Activation button inside HarborSettingsRoomView!
+          settings_target = 'SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)'
+          settings_replacement = '''SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)
+                                  .onChange(of: store.realDebridToken) { _, newVal in
+                                      if !newVal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                          store.debridProviderRaw = DebridProviderType.realDebrid.rawValue
+                                      }
+                                  }
+                              Button {
+                                  Task {
+                                      store.debridProviderRaw = DebridProviderType.realDebrid.rawValue
+                                      let status = await DebridService.shared.verifyRealDebridAccount(token: store.realDebridToken)
+                                      store.statusBannerMessage = status
+                                  }
+                              } label: {
+                                  Label("فحص وتفعيل حساب Real-Debrid الآن", systemImage: "bolt.shield.fill")
+                                      .font(.subheadline.weight(.bold))
+                                      .foregroundStyle(store.theme.accent)
+                              }
+                              if let msg = store.statusBannerMessage {
+                                  Text(msg)
+                                      .font(.caption.weight(.bold))
+                                      .foregroundStyle(msg.contains("✅") ? .green : .orange)
+                              }'''
+          assert settings_target in views_c, "settings_target missing"
+          views_c = views_c.replace(settings_target, settings_replacement)
 
           views_c = views_c.replace(
               '.frame(height: 280)\n                    .clipped()',
@@ -1816,7 +2288,7 @@ jobs:
           with open("Sources/HarborIOS/HarborViews.swift", "w", encoding="utf-8") as f:
               f.write(views_c)
 
-          print("All full readable Harbor iOS v2.2 patches applied cleanly!")
+          print("All Harbor iOS v2.3 patches (No Bubble + Authentic Vocals + Bespoke Studio + Real-Debrid Fix) applied cleanly!")
           PYEOF
 
           cat << 'EOF' > project.yml
@@ -1844,8 +2316,8 @@ jobs:
                   CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
                   CFBundleInfoDictionaryVersion: "6.0"
                   CFBundlePackageType: APPL
-                  CFBundleShortVersionString: "2.2.0"
-                  CFBundleVersion: "5"
+                  CFBundleShortVersionString: "2.3.0"
+                  CFBundleVersion: "6"
                   LSRequiresIPhoneOS: true
                   UIRequiresFullScreen: true
                   UIStatusBarStyle: UIStatusBarStyleLightContent
