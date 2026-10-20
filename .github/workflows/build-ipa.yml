@@ -159,9 +159,10 @@ jobs:
                   let rawQuery = "\(title) \(artist)"
                   let q = rawQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
 
+                  let titlePrefix = String(title.lowercased().prefix(6))
                   if let s1 = await fromJioSaavnDirect(q, rawQuery: rawQuery),
                      let verified = s1.first(where: {
-                         $0.title.lowercased().contains(title.lowercased().prefix(6)) &&
+                         !titlePrefix.isEmpty && $0.title.lowercased().contains(titlePrefix) &&
                          artistMatches(trackArtist: $0.artist, expectedArtist: artist)
                      }) {
                       return (verified.streamURL, verified.durationSeconds)
@@ -169,7 +170,7 @@ jobs:
 
                   if let s2 = await fromSaavnMirrors(q, rawQuery: rawQuery),
                      let verified = s2.first(where: {
-                         $0.title.lowercased().contains(title.lowercased().prefix(6)) &&
+                         !titlePrefix.isEmpty && $0.title.lowercased().contains(titlePrefix) &&
                          artistMatches(trackArtist: $0.artist, expectedArtist: artist)
                      }) {
                       return (verified.streamURL, verified.durationSeconds)
@@ -389,23 +390,23 @@ jobs:
 
                   // 1. If Movie, fetch YTS Official MP4 4K/1080p InfoHashes (99.9% Cached on Real-Debrid & Native AVPlayer MP4!)
                   if isMov, let ytsStreams = await fetchYTSMovieHashes(imdbId: imdbId, movieTitle: item.name, hasRD: hasRD, fallbackURL: fallbackURL) {
-                      collected.append(contentsOf: ytsStreams)
+                      for entry in ytsStreams { collected.append((addonName: entry.0, stream: entry.1)) }
                   }
 
                   // 2. If Series, fetch EZTV Episode InfoHashes for Real-Debrid
                   if !isMov, let eztvStreams = await fetchEZTVSeriesHashes(imdbId: imdbId, season: s, episode: e, showTitle: item.name, hasRD: hasRD, fallbackURL: fallbackURL) {
-                      collected.append(contentsOf: eztvStreams)
+                      for entry in eztvStreams { collected.append((addonName: entry.0, stream: entry.1)) }
                   }
 
                   // 3. Query all installed Stremio Addons (automatically injecting realdebrid=TOKEN into Torrentio & Peerflix when token is set!)
                   await withTaskGroup(of: [(String, StremioRawStream)].self) { group in
                       for addon in installedAddons where addon.id != "com.linvo.cinemeta" {
                           guard let t = addon.transportUrl, t.hasPrefix("http"), t.hasSuffix("/manifest.json") else { continue }
-                          var base = t.replacingOccurrences(of: "/manifest.json", with: "")
-                          if hasRD && (base.contains("torrentio.strem.fun") || base.contains("peerflix.mov")) && !base.contains("realdebrid=") {
-                              base = "\(base)/realdebrid=\(rdToken)"
-                          }
-                          let addonName = hasRD && (base.contains("realdebrid=")) ? "\(addon.name) ⚡ RD+" : addon.name
+                          let rawBase = t.replacingOccurrences(of: "/manifest.json", with: "")
+                          let base = (hasRD && (rawBase.contains("torrentio.strem.fun") || rawBase.contains("peerflix.mov")) && !rawBase.contains("realdebrid="))
+                              ? "\(rawBase)/realdebrid=\(rdToken)"
+                              : rawBase
+                          let addonName = (hasRD && base.contains("realdebrid=")) ? "\(addon.name) ⚡ RD+" : addon.name
                           group.addTask {
                               let enc = targetId.replacingOccurrences(of: ":", with: "%3A")
                               for uStr in ["\(base)/stream/\(mediaType)/\(targetId).json", "\(base)/stream/\(mediaType)/\(enc).json"] {
@@ -930,7 +931,7 @@ jobs:
                       }
                       let username = (json["username"] as? String) ?? "User"
                       let type = (json["type"] as? String)?.uppercased() ?? "PREMIUM"
-                      let exp = (json["expiration"] as? String)?.prefix(10) ?? ""
+                      let exp = String(((json["expiration"] as? String) ?? "").prefix(10))
                       return "✅ متصل بنجاح: \\(username) (\\(type)) • ينتهي: \\(exp)"
                   } catch {
                       return "❌ تعذر الاتصال بخادم Real-Debrid"
@@ -1729,7 +1730,7 @@ jobs:
 
                                           ScrollView(.horizontal, showsIndicators: false) {
                                               HStack(spacing: 14) {
-                                                  ForEach(store.musicTracks.prefix(8)) { item in
+                                                  ForEach(Array(store.musicTracks.prefix(8))) { item in
                                                       let isCurrent = (audioManager.currentTrack?.id == item.id)
                                                       Button {
                                                           withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
@@ -2221,13 +2222,18 @@ jobs:
           views_c = m_prefix + bespoke_music_section + m_suffix
 
           # Add Live Real-Debrid Account Test & Activation button inside HarborSettingsRoomView!
-          settings_target = 'SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)'
-          settings_replacement = '''SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)
+          settings_target = '''                    SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)
+                                  .textInputAutocapitalization(.never)
+                                  .autocorrectionDisabled()'''
+          settings_replacement = '''                    SecureField("مفتاح Real-Debrid API Token", text: $store.realDebridToken)
+                                  .textInputAutocapitalization(.never)
+                                  .autocorrectionDisabled()
                                   .onChange(of: store.realDebridToken) { _, newVal in
                                       if !newVal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                           store.debridProviderRaw = DebridProviderType.realDebrid.rawValue
                                       }
                                   }
+
                               Button {
                                   Task {
                                       store.debridProviderRaw = DebridProviderType.realDebrid.rawValue
@@ -2239,10 +2245,11 @@ jobs:
                                       .font(.subheadline.weight(.bold))
                                       .foregroundStyle(store.theme.accent)
                               }
+
                               if let msg = store.statusBannerMessage {
                                   Text(msg)
                                       .font(.caption.weight(.bold))
-                                      .foregroundStyle(msg.contains("✅") ? .green : .orange)
+                                      .foregroundStyle(msg.contains("✅") ? Color.green : Color.orange)
                               }'''
           assert settings_target in views_c, "settings_target missing"
           views_c = views_c.replace(settings_target, settings_replacement)
@@ -2394,3 +2401,4 @@ jobs:
         with:
           name: Harbor-iOS-IPA
           path: build/Harbor.ipa
+
