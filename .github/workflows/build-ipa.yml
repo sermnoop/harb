@@ -30,7 +30,19 @@ jobs:
 
           cat << 'EOF' >> Sources/HarborIOS/HarborStore.swift
 
-          // MARK: - Multi-Engine Music Resolver (JioSaavn Full-Track + Deezer + iTunes SA/US + Piped + Audius)
+          // MARK: - Smooth Interactive Button Style
+
+          struct SmoothPressButtonStyle: ButtonStyle {
+              var scaleAmount: CGFloat = 0.96
+              func makeBody(configuration: Configuration) -> some View {
+                  configuration.label
+                      .scaleEffect(configuration.isPressed ? scaleAmount : 1.0)
+                      .opacity(configuration.isPressed ? 0.92 : 1.0)
+                      .animation(.spring(response: 0.28, dampingFraction: 0.72), value: configuration.isPressed)
+              }
+          }
+
+          // MARK: - Multi-Engine Music Resolver (JioSaavn Full-Track + Deezer + iTunes SA/US + Piped)
 
           enum JioSaavnStreamCrypto {
               static func decryptURL(_ enc: String) -> String? {
@@ -75,7 +87,6 @@ jobs:
                   var combined: [HarborMusicTrack] = []
                   var seenKeys = Set<String>()
 
-                  // 1. Add full-length matches first
                   for t in fullPool {
                       let key = "\(t.title.lowercased())|\(t.artist.lowercased().prefix(8))"
                       if !seenKeys.contains(key) {
@@ -84,7 +95,6 @@ jobs:
                       }
                   }
 
-                  // 2. Merge Deezer & iTunes SA tracks (upgrading with fullPool stream if title matches, otherwise keeping so NO song is ever missing!)
                   let catalogPool = (deezer ?? []) + (itunesSA ?? [])
                   for catTrack in catalogPool {
                       let key = "\(catTrack.title.lowercased())|\(catTrack.artist.lowercased().prefix(8))"
@@ -145,7 +155,7 @@ jobs:
                       let album = clean((info?["album"] as? String) ?? "Full Track")
                       let dur = Double((info?["duration"] as? String) ?? "") ?? Double((info?["duration"] as? Int) ?? 210)
                       let art = (item["image"] as? String)?.replacingOccurrences(of: "150x150", with: "500x500").replacingOccurrences(of: "http://", with: "https://")
-                      return HarborMusicTrack(id: "saavn-\(id)", title: title, artist: artist, album: "\(album) • كامل", artworkURL: art, streamURL: stream, durationSeconds: max(dur, 60), genre: "Full Song", isLiveStream: false)
+                      return HarborMusicTrack(id: "saavn-\(id)", title: title, artist: artist, album: "\(album) • كامل", artworkURL: art, streamURL: stream, durationSeconds: max(dur, 60), genre: "Lossless Audio", isLiveStream: false)
                   }
               }
 
@@ -172,7 +182,7 @@ jobs:
                           }
                           let imgs = item["image"] as? [[String: Any]]
                           let art = ((imgs?.last?["url"] as? String) ?? (imgs?.last?["link"] as? String))?.replacingOccurrences(of: "http://", with: "https://")
-                          return HarborMusicTrack(id: UUID().uuidString, title: title, artist: artist, album: "كامل 320kbps", artworkURL: art, streamURL: rawLink.replacingOccurrences(of: "http://", with: "https://"), durationSeconds: max(dur, 60), genre: "Music", isLiveStream: false)
+                          return HarborMusicTrack(id: UUID().uuidString, title: title, artist: artist, album: "كامل 320kbps", artworkURL: art, streamURL: rawLink.replacingOccurrences(of: "http://", with: "https://"), durationSeconds: max(dur, 60), genre: "Lossless", isLiveStream: false)
                       }
                       if !list.isEmpty { return list }
                   }
@@ -196,7 +206,7 @@ jobs:
                       let albumObj = item["album"] as? [String: Any]
                       let album = (albumObj?["title"] as? String) ?? "Single"
                       let art = (albumObj?["cover_xl"] as? String) ?? (albumObj?["cover_big"] as? String) ?? (albumObj?["cover_medium"] as? String)
-                      return HarborMusicTrack(id: "dz-\(id)", title: title, artist: artist, album: album, artworkURL: art, streamURL: preview, durationSeconds: max(dur, 30), genre: "Music", isLiveStream: false)
+                      return HarborMusicTrack(id: "dz-\(id)", title: title, artist: artist, album: album, artworkURL: art, streamURL: preview, durationSeconds: max(dur, 30), genre: "Apple Music Catalog", isLiveStream: false)
                   }
               }
 
@@ -258,6 +268,8 @@ jobs:
                   s.replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&#039;", with: "'")
               }
           }
+
+          // MARK: - Multi-Addon & 6 Direct Cloud Stream Servers Builder
 
           enum HarborCloudStreamBuilder {
               static func defaultAddons() -> [StremioManifest] {
@@ -326,6 +338,8 @@ jobs:
                   return HarborStreamEngine.processStreams(rawStreams: collected, expectedTitle: item.name, safetyFilter: .off)
               }
           }
+
+          // MARK: - Hybrid Smart Video Player (AVPlayer + Ad-Blocked WKWebView Cloud Player)
 
           struct HarborSmartVideoContainer: View {
               let url: URL
@@ -414,9 +428,63 @@ jobs:
               }
           }
 
-          // MARK: - iPhone 15 Pro Max Mawj (موج) Floating Pill Tab Bar & Hero UI Components
+          // MARK: - Dynamic Artwork-Colored Ambient Radiation Glow & Apple Music Liquid Glass UI
 
-          struct MawjCurvedWaveDivider: View {
+          struct ArtworkRadiationContainer<Content: View>: View {
+              let artworkURL: String?
+              let isActive: Bool
+              var glowRadius: CGFloat = 28
+              var scale: CGFloat = 1.28
+              @ViewBuilder let content: () -> Content
+              @State private var pulse: Bool = false
+
+              var body: some View {
+                  ZStack {
+                      if isActive, let urlStr = artworkURL, let url = URL(string: urlStr) {
+                          AsyncImage(url: url) { phase in
+                              if case .success(let image) = phase {
+                                  ZStack {
+                                      image
+                                          .resizable()
+                                          .scaledToFill()
+                                          .scaleEffect(pulse ? scale * 1.12 : scale)
+                                          .saturation(2.3)
+                                          .blur(radius: glowRadius)
+                                          .opacity(pulse ? 0.88 : 0.62)
+
+                                      image
+                                          .resizable()
+                                          .scaledToFill()
+                                          .scaleEffect(pulse ? 1.15 : 1.04)
+                                          .saturation(1.9)
+                                          .blur(radius: glowRadius * 0.5)
+                                          .opacity(0.75)
+                                  }
+                              } else {
+                                  Circle()
+                                      .fill(
+                                          RadialGradient(
+                                              colors: [Color(red: 0.95, green: 0.22, blue: 0.36).opacity(0.75), .clear],
+                                              center: .center,
+                                              startRadius: 4,
+                                              endRadius: glowRadius * 2
+                                          )
+                                      )
+                                      .scaleEffect(pulse ? 1.2 : 0.95)
+                              }
+                          }
+                          .onAppear {
+                              withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
+                                  pulse = true
+                              }
+                          }
+                      }
+                      content()
+                  }
+              }
+          }
+
+          struct HarborCurvedWaveDivider: View {
               var body: some View {
                   GeometryReader { geo in
                       Path { path in
@@ -440,21 +508,21 @@ jobs:
               }
           }
 
-          struct MawjFloatingTabBar: View {
+          struct HarborFloatingTabBar: View {
               @Binding var selectedTab: HarborRoomTab
+              @Namespace private var tabAnimation
 
               private let items: [(tab: HarborRoomTab, icon: String)] = [
                   (.home, "house.fill"),
                   (.discover, "magnifyingglass"),
-                  (.music, "square.stack.fill"),
+                  (.music, "music.note.house.fill"),
                   (.addons, "arrow.down.to.line")
               ]
 
               var body: some View {
                   HStack(spacing: 0) {
-                      // Left circular avatar button (Settings / Profile) matching attached image
                       Button {
-                          withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                          withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
                               selectedTab = .settings
                           }
                       } label: {
@@ -479,51 +547,54 @@ jobs:
                                   .stroke(selectedTab == .settings ? Color(red: 0.20, green: 0.88, blue: 0.62) : Color.white.opacity(0.25), lineWidth: 1.5)
                           )
                       }
+                      .buttonStyle(SmoothPressButtonStyle(scaleAmount: 0.90))
                       .frame(maxWidth: .infinity)
 
                       ForEach(items.reversed(), id: \.tab.id) { entry in
                           let isSelected = (selectedTab == entry.tab)
                           Button {
-                              withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                              withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
                                   selectedTab = entry.tab
                               }
                           } label: {
-                              VStack(spacing: 5) {
+                              VStack(spacing: 4) {
                                   ZStack {
                                       if isSelected {
                                           Capsule()
                                               .fill(Color(red: 0.20, green: 0.88, blue: 0.62))
                                               .frame(width: 20, height: 3.5)
                                               .shadow(color: Color(red: 0.20, green: 0.88, blue: 0.62), radius: 5)
+                                              .matchedGeometryEffect(id: "ActiveTabArc", in: tabAnimation)
                                       } else {
                                           Color.clear.frame(width: 20, height: 3.5)
                                       }
                                   }
                                   Image(systemName: entry.icon)
-                                      .font(.system(size: 21, weight: isSelected ? .bold : .medium))
-                                      .foregroundStyle(isSelected ? .white : .white.opacity(0.45))
+                                      .font(.system(size: 20, weight: isSelected ? .bold : .medium))
+                                      .foregroundStyle(isSelected ? .white : .white.opacity(0.48))
+                                      .scaleEffect(isSelected ? 1.08 : 1.0)
                               }
                               .frame(maxWidth: .infinity)
                               .padding(.vertical, 6)
                           }
-                          .buttonStyle(.plain)
+                          .buttonStyle(SmoothPressButtonStyle(scaleAmount: 0.90))
                       }
                   }
                   .padding(.horizontal, 14)
-                  .frame(height: 66)
+                  .frame(height: 64)
                   .background(
                       ZStack {
                           Capsule(style: .continuous)
-                              .fill(Color(red: 0.11, green: 0.11, blue: 0.14).opacity(0.92))
+                              .fill(Color(red: 0.10, green: 0.10, blue: 0.13).opacity(0.88))
                           Capsule(style: .continuous)
-                              .fill(.ultraThinMaterial.opacity(0.5))
+                              .fill(.ultraThinMaterial)
                       }
                   )
                   .overlay(
                       Capsule(style: .continuous)
                           .stroke(
                               LinearGradient(
-                                  colors: [Color.white.opacity(0.24), Color.white.opacity(0.06)],
+                                  colors: [Color.white.opacity(0.28), Color.white.opacity(0.06)],
                                   startPoint: .top,
                                   endPoint: .bottom
                               ),
@@ -531,10 +602,30 @@ jobs:
                           )
                   )
                   .shadow(color: .black.opacity(0.65), radius: 18, y: 8)
-                  .padding(.horizontal, 26)
+                  .padding(.horizontal, 24)
                   .environment(\.layoutDirection, .leftToRight)
               }
           }
+
+          struct AppleMusicBrowseCardItem: Identifiable {
+              let id = UUID()
+              let title: String
+              let subtitle: String
+              let query: String
+              let colors: [Color]
+              let symbol: String
+          }
+
+          let appleMusicBrowseGridItems: [AppleMusicBrowseCardItem] = [
+              AppleMusicBrowseCardItem(title: "Concerts", subtitle: "حفلات مباشرة", query: "Live Concert Tour", colors: [Color(red: 0.42, green: 0.12, blue: 0.24), Color(red: 0.14, green: 0.05, blue: 0.10)], symbol: "music.mic.circle.fill"),
+              AppleMusicBrowseCardItem(title: "Apple Music Live", subtitle: "عروض حصرية", query: "Acoustic Live Sessions", colors: [Color(red: 0.18, green: 0.20, blue: 0.22), Color(red: 0.06, green: 0.07, blue: 0.08)], symbol: "waveform.badge.mic"),
+              AppleMusicBrowseCardItem(title: "Spatial Audio", subtitle: "صوت مكاني", query: "The Weeknd Dolby Atmos", colors: [Color(red: 0.90, green: 0.24, blue: 0.32), Color(red: 0.58, green: 0.10, blue: 0.18)], symbol: "ear.and.waveform"),
+              AppleMusicBrowseCardItem(title: "Charts", subtitle: "الأعلى استماعاً", query: "Top Global Hits 2026", colors: [Color(red: 0.56, green: 0.58, blue: 0.16), Color(red: 0.26, green: 0.28, blue: 0.08)], symbol: "chart.bar.xaxis"),
+              AppleMusicBrowseCardItem(title: "Arabic Hits", subtitle: "أغاني عربية", query: "عمرو دياب الشامي", colors: [Color(red: 0.16, green: 0.72, blue: 0.52), Color(red: 0.06, green: 0.36, blue: 0.26)], symbol: "sparkles"),
+              AppleMusicBrowseCardItem(title: "Khaliji", subtitle: "خليجي وطرب", query: "عبدالمجيد عبدالله راشد الماجد", colors: [Color(red: 0.24, green: 0.52, blue: 0.88), Color(red: 0.12, green: 0.24, blue: 0.54)], symbol: "guitars.fill"),
+              AppleMusicBrowseCardItem(title: "Hits", subtitle: "الأغاني الرائجة", query: "Billie Eilish Bruno Mars", colors: [Color(red: 0.88, green: 0.68, blue: 0.18), Color(red: 0.54, green: 0.38, blue: 0.06)], symbol: "flame.fill"),
+              AppleMusicBrowseCardItem(title: "Apple Music Radio", subtitle: "إذاعات على مدار الساعة", query: "Lana Del Rey Travis Scott", colors: [Color(red: 0.88, green: 0.18, blue: 0.28), Color(red: 0.44, green: 0.08, blue: 0.14)], symbol: "dot.radiowaves.left.and.right")
+          ]
           EOF
 
           python3 << 'PYEOF'
@@ -559,7 +650,7 @@ jobs:
           )
           store_c = store_c.replace(
               'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }',
-              'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }\n        let fullTracks = await JioSaavnStreamCrypto.searchFullLengthTracks(query: query)\n        if !fullTracks.isEmpty {\n            self.musicTracks = fullTracks\n            return\n        }'
+              'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }\n        let fullTracks = await JioSaavnStreamCrypto.searchFullLengthTracks(query: query)\n        if !fullTracks.isEmpty {\n            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {\n                self.musicTracks = fullTracks\n            }\n            return\n        }'
           )
           with open("Sources/HarborIOS/HarborStore.swift", "w", encoding="utf-8") as f:
               f.write(store_c)
@@ -614,6 +705,7 @@ jobs:
               @StateObject private var store = HarborStore()
               @StateObject private var audioManager = HarborAudioPlayerManager()
               @State private var selectedTab: HarborRoomTab = .home
+              @State private var isTabBarHidden: Bool = false
 
               public init() {}
 
@@ -636,15 +728,74 @@ jobs:
                           }
                       }
                       .frame(maxWidth: .infinity, maxHeight: .infinity)
+                      .simultaneousGesture(
+                          DragGesture(minimumDistance: 10)
+                              .onChanged { value in
+                                  let dy = value.translation.height
+                                  if dy < -18 && !isTabBarHidden {
+                                      withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                                          isTabBarHidden = true
+                                      }
+                                  } else if dy > 14 && isTabBarHidden {
+                                      withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
+                                          isTabBarHidden = false
+                                      }
+                                  }
+                              }
+                      )
 
                       VStack(spacing: 10) {
                           if audioManager.currentTrack != nil {
-                              HarborMiniAudioPlayerBar()
+                              HStack(spacing: 10) {
+                                  if isTabBarHidden {
+                                      Button {
+                                          withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+                                              selectedTab = .discover
+                                              isTabBarHidden = false
+                                          }
+                                      } label: {
+                                          Image(systemName: "magnifyingglass")
+                                              .font(.system(size: 18, weight: .bold))
+                                              .foregroundStyle(Color(red: 0.95, green: 0.25, blue: 0.38))
+                                              .frame(width: 48, height: 48)
+                                              .background(.ultraThinMaterial)
+                                              .clipShape(Circle())
+                                              .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                                      }
+                                      .buttonStyle(SmoothPressButtonStyle())
+                                      .transition(.scale.combined(with: .opacity))
+                                  }
+
+                                  HarborMiniAudioPlayerBar()
+
+                                  if isTabBarHidden {
+                                      Button {
+                                          withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+                                              isTabBarHidden = false
+                                          }
+                                      } label: {
+                                          Image(systemName: "house.fill")
+                                              .font(.system(size: 18, weight: .bold))
+                                              .foregroundStyle(.white)
+                                              .frame(width: 48, height: 48)
+                                              .background(.ultraThinMaterial)
+                                              .clipShape(Circle())
+                                              .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                                      }
+                                      .buttonStyle(SmoothPressButtonStyle())
+                                      .transition(.scale.combined(with: .opacity))
+                                  }
+                              }
+                              .padding(.horizontal, isTabBarHidden ? 14 : 0)
+                          }
+
+                          if !isTabBarHidden {
+                              HarborFloatingTabBar(selectedTab: $selectedTab)
                                   .transition(.move(edge: .bottom).combined(with: .opacity))
                           }
-                          MawjFloatingTabBar(selectedTab: $selectedTab)
                       }
                       .padding(.bottom, 6)
+                      .animation(.spring(response: 0.36, dampingFraction: 0.82), value: isTabBarHidden)
                   }
                   .ignoresSafeArea(.keyboard, edges: .bottom)
                   .environmentObject(store)
@@ -685,7 +836,7 @@ jobs:
                                           .frame(width: UIScreen.main.bounds.width, height: 500)
                                           .tabViewStyle(.page(indexDisplayMode: .never))
 
-                                          MawjCurvedWaveDivider()
+                                          HarborCurvedWaveDivider()
                                               .offset(y: -10)
 
                                           HStack(spacing: 6) {
@@ -693,7 +844,7 @@ jobs:
                                                   Capsule()
                                                       .fill(idx == activeHeroIndex ? Color.white : Color.white.opacity(0.25))
                                                       .frame(width: idx == activeHeroIndex ? 22 : 6, height: 3)
-                                                      .animation(.easeInOut(duration: 0.25), value: activeHeroIndex)
+                                                      .animation(.spring(response: 0.3, dampingFraction: 0.75), value: activeHeroIndex)
                                               }
                                           }
                                           .padding(.top, 2)
@@ -771,15 +922,16 @@ jobs:
                                   }
                                   .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
                               }
+                              .buttonStyle(SmoothPressButtonStyle())
 
                               Spacer()
 
                               HStack(spacing: 8) {
-                                  Text("موج")
-                                      .font(.system(size: 26, weight: .black, design: .rounded))
+                                  Text("Harbor")
+                                      .font(.system(size: 24, weight: .black, design: .rounded))
                                       .foregroundStyle(.white)
                                   Image(systemName: "sailboat.fill")
-                                      .font(.system(size: 20, weight: .bold))
+                                      .font(.system(size: 19, weight: .bold))
                                       .foregroundStyle(.white)
                               }
                           }
@@ -860,12 +1012,14 @@ jobs:
                                   .foregroundStyle(Color.black)
                                   .clipShape(Capsule())
                               }
+                              .buttonStyle(SmoothPressButtonStyle())
 
                               Button(action: onSelect) {
                                   Text("Trailer")
                                       .font(.headline.weight(.semibold))
                                       .foregroundStyle(.white)
                               }
+                              .buttonStyle(SmoothPressButtonStyle())
                           }
                           .padding(.top, 4)
                       }
@@ -996,7 +1150,7 @@ jobs:
                               .stroke(Color.white.opacity(0.08), lineWidth: 0.8)
                       )
                   }
-                  .buttonStyle(.plain)
+                  .buttonStyle(SmoothPressButtonStyle())
               }
           }
 
@@ -1004,6 +1158,622 @@ jobs:
           prefix = views_c[:views_c.index(start_marker)]
           suffix = views_c[views_c.index(end_marker):]
           views_c = prefix + new_root_and_home + suffix
+
+          music_start = "struct HarborMusicRoomView: View {"
+          books_start = "// MARK: - 15. Harbor Books & Ebooks Room"
+          assert music_start in views_c and books_start in views_c, "Music section markers missing"
+
+          apple_music_section = '''struct HarborMusicRoomView: View {
+              @EnvironmentObject var store: HarborStore
+              @EnvironmentObject var audioManager: HarborAudioPlayerManager
+              @State private var searchQuery: String = ""
+              @State private var selectedCategoryTitle: String = "الكل"
+
+              private let gridColumns = [
+                  GridItem(.flexible(), spacing: 12),
+                  GridItem(.flexible(), spacing: 12)
+              ]
+
+              var body: some View {
+                  NavigationStack {
+                      ZStack(alignment: .top) {
+                          Color.black.ignoresSafeArea()
+
+                          if let current = audioManager.currentTrack, audioManager.isPlaying {
+                              ArtworkRadiationContainer(artworkURL: current.artworkURL, isActive: true, glowRadius: 55, scale: 1.8) {
+                                  Color.clear.frame(height: 220)
+                              }
+                              .frame(height: 220)
+                              .opacity(0.55)
+                              .ignoresSafeArea()
+                          } else {
+                              LinearGradient(
+                                  colors: [Color(red: 0.85, green: 0.16, blue: 0.26).opacity(0.38), .clear],
+                                  startPoint: .top,
+                                  endPoint: .bottom
+                              )
+                              .frame(height: 240)
+                              .ignoresSafeArea()
+                          }
+
+                          ScrollView(.vertical, showsIndicators: false) {
+                              VStack(alignment: .leading, spacing: 20) {
+                                  HStack {
+                                      ZStack {
+                                          Circle()
+                                              .fill(Color(red: 0.22, green: 0.20, blue: 0.34))
+                                              .frame(width: 40, height: 40)
+                                          Text("HB")
+                                              .font(.system(size: 15, weight: .bold, design: .rounded))
+                                              .foregroundStyle(.white)
+                                      }
+                                      .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+
+                                      Spacer()
+
+                                      Text("Search")
+                                          .font(.system(size: 34, weight: .heavy))
+                                          .foregroundStyle(.white)
+                                  }
+                                  .padding(.horizontal, 16)
+                                  .padding(.top, 6)
+                                  .environment(\\.layoutDirection, .leftToRight)
+
+                                  HStack(spacing: 10) {
+                                      Image(systemName: "mic.fill")
+                                          .foregroundStyle(.white.opacity(0.65))
+
+                                      TextField("الفنانون والأغاني وكلمات الأغاني والمزيد", text: $searchQuery)
+                                          .multilineTextAlignment(.trailing)
+                                          .foregroundStyle(.white)
+                                          .submitLabel(.search)
+                                          .onSubmit {
+                                              Task { await store.searchMusic(query: searchQuery) }
+                                          }
+
+                                      if !searchQuery.isEmpty {
+                                          Button {
+                                              searchQuery = ""
+                                          } label: {
+                                              Image(systemName: "xmark.circle.fill")
+                                                  .foregroundStyle(.white.opacity(0.6))
+                                          }
+                                      }
+
+                                      Image(systemName: "magnifyingglass")
+                                          .foregroundStyle(.white.opacity(0.65))
+                                  }
+                                  .padding(.horizontal, 16)
+                                  .padding(.vertical, 13)
+                                  .background(.ultraThinMaterial)
+                                  .clipShape(Capsule())
+                                  .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                                  .padding(.horizontal, 16)
+                                  .environment(\\.layoutDirection, .leftToRight)
+
+                                  VStack(spacing: 0) {
+                                      ZStack {
+                                          LinearGradient(
+                                              colors: [Color(red: 0.95, green: 0.24, blue: 0.30), Color(red: 0.82, green: 0.14, blue: 0.22)],
+                                              startPoint: .topLeading,
+                                              endPoint: .bottomTrailing
+                                          )
+                                          HStack(spacing: 10) {
+                                              Image(systemName: "apple.logo")
+                                                  .font(.system(size: 44, weight: .bold))
+                                              Text("Music")
+                                                  .font(.system(size: 48, weight: .bold, design: .rounded))
+                                          }
+                                          .foregroundStyle(.white)
+                                          .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                                      }
+                                      .frame(height: 155)
+
+                                      VStack(spacing: 10) {
+                                          Text("Explore 100 million songs. All ad-free.")
+                                              .font(.system(size: 19, weight: .bold))
+                                              .foregroundStyle(.white)
+                                              .multilineTextAlignment(.center)
+
+                                          Text("استمع لأغنيتك كاملة بجودة 320kbps مع إشعاع الغلاف المتفاعل وكلمات الأغاني المتزامنة.")
+                                              .font(.caption)
+                                              .foregroundStyle(.white.opacity(0.68))
+                                              .multilineTextAlignment(.center)
+                                              .padding(.horizontal, 16)
+
+                                          Button {
+                                              if let first = store.musicTracks.first {
+                                                  audioManager.play(track: first, queue: store.musicTracks)
+                                              } else {
+                                                  Task { await store.searchMusic(query: "The Weeknd") }
+                                              }
+                                          } label: {
+                                              Text("Play Trending Now")
+                                                  .font(.subheadline.weight(.bold))
+                                                  .padding(.horizontal, 28)
+                                                  .padding(.vertical, 10)
+                                                  .background(Color(red: 0.92, green: 0.24, blue: 0.32))
+                                                  .foregroundStyle(.white)
+                                                  .clipShape(Capsule())
+                                          }
+                                          .buttonStyle(SmoothPressButtonStyle())
+                                          .padding(.top, 4)
+                                      }
+                                      .padding(.vertical, 18)
+                                      .frame(maxWidth: .infinity)
+                                      .background(Color(red: 0.11, green: 0.11, blue: 0.13))
+                                  }
+                                  .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                  .padding(.horizontal, 16)
+
+                                  VStack(alignment: .leading, spacing: 12) {
+                                      HStack {
+                                          Text(selectedCategoryTitle == "الكل" ? "Top Songs · الأغاني المختارة" : selectedCategoryTitle)
+                                              .font(.title3.weight(.bold))
+                                              .foregroundStyle(.white)
+                                          Spacer()
+                                          if store.isLoadingMusic {
+                                              ProgressView().tint(Color(red: 0.95, green: 0.24, blue: 0.32))
+                                          }
+                                      }
+                                      .padding(.horizontal, 16)
+                                      .environment(\\.layoutDirection, .leftToRight)
+
+                                      VStack(spacing: 12) {
+                                          ForEach(store.musicTracks) { track in
+                                              HarborMusicTrackRow(
+                                                  track: track,
+                                                  isCurrent: audioManager.currentTrack?.id == track.id,
+                                                  isPlaying: audioManager.isPlaying
+                                              ) {
+                                                  withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                                      audioManager.play(track: track, queue: store.musicTracks)
+                                                  }
+                                              }
+                                          }
+                                      }
+                                      .padding(.horizontal, 16)
+                                  }
+
+                                  VStack(alignment: .leading, spacing: 12) {
+                                      Text("Browse Categories · تصفح الأقسام")
+                                          .font(.title3.weight(.bold))
+                                          .foregroundStyle(.white)
+                                          .padding(.horizontal, 16)
+                                          .environment(\\.layoutDirection, .leftToRight)
+
+                                      LazyVGrid(columns: gridColumns, spacing: 12) {
+                                          ForEach(appleMusicBrowseGridItems) { card in
+                                              Button {
+                                                  withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                                      selectedCategoryTitle = card.title
+                                                      searchQuery = card.query
+                                                  }
+                                                  Task { await store.searchMusic(query: card.query) }
+                                              } label: {
+                                                  ZStack(alignment: .bottomTrailing) {
+                                                      LinearGradient(
+                                                          colors: card.colors,
+                                                          startPoint: .topLeading,
+                                                          endPoint: .bottomTrailing
+                                                      )
+
+                                                      Image(systemName: card.symbol)
+                                                          .font(.system(size: 54, weight: .bold))
+                                                          .foregroundStyle(.white.opacity(0.18))
+                                                          .offset(x: -65, y: -18)
+
+                                                      VStack(alignment: .trailing, spacing: 2) {
+                                                          Text(card.title)
+                                                              .font(.system(size: 16, weight: .bold))
+                                                              .foregroundStyle(.white)
+                                                          Text(card.subtitle)
+                                                              .font(.caption2)
+                                                              .foregroundStyle(.white.opacity(0.78))
+                                                      }
+                                                      .padding(12)
+                                                  }
+                                                  .frame(height: 108)
+                                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                                  .overlay(
+                                                      RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                          .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+                                                  )
+                                              }
+                                              .buttonStyle(SmoothPressButtonStyle())
+                                          }
+                                      }
+                                      .padding(.horizontal, 16)
+                                      .environment(\\.layoutDirection, .leftToRight)
+                                  }
+
+                                  Spacer(minLength: 140)
+                              }
+                              .padding(.top, 8)
+                          }
+                      }
+                      .toolbar(.hidden, for: .navigationBar)
+                  }
+              }
+          }
+
+          struct HarborMusicTrackRow: View {
+              @EnvironmentObject var store: HarborStore
+              let track: HarborMusicTrack
+              let isCurrent: Bool
+              let isPlaying: Bool
+              let onTap: () -> Void
+
+              var body: some View {
+                  Button(action: onTap) {
+                      HStack(spacing: 14) {
+                          ArtworkRadiationContainer(
+                              artworkURL: track.artworkURL,
+                              isActive: isCurrent,
+                              glowRadius: 18,
+                              scale: 1.32
+                          ) {
+                              AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
+                                  switch phase {
+                                  case .success(let image):
+                                      image.resizable().scaledToFill()
+                                  default:
+                                      ZStack {
+                                          Color(red: 0.16, green: 0.16, blue: 0.20)
+                                          Image(systemName: "music.note")
+                                              .foregroundStyle(Color(red: 0.95, green: 0.24, blue: 0.34))
+                                      }
+                                  }
+                              }
+                              .frame(width: 56, height: 56)
+                              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                              .overlay(
+                                  RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                      .stroke(isCurrent ? Color.white.opacity(0.6) : Color.white.opacity(0.1), lineWidth: isCurrent ? 1.5 : 0.6)
+                              )
+                          }
+                          .frame(width: 62, height: 62)
+
+                          VStack(alignment: .leading, spacing: 4) {
+                              Text(track.title)
+                                  .font(.system(size: 16, weight: .bold))
+                                  .foregroundStyle(isCurrent ? Color(red: 0.98, green: 0.30, blue: 0.40) : .white)
+                                  .lineLimit(1)
+
+                              let durText = track.isLiveStream
+                                  ? "LIVE 24/7"
+                                  : String(format: "%d:%02d", Int(track.durationSeconds) / 60, Int(track.durationSeconds) % 60)
+                              Text("\\(track.artist) · \\(durText) · \\(track.album)")
+                                  .font(.caption)
+                                  .foregroundStyle(.white.opacity(0.62))
+                                  .lineLimit(1)
+                          }
+
+                          Spacer()
+
+                          if isCurrent {
+                              Image(systemName: isPlaying ? "waveform" : "pause.circle.fill")
+                                  .font(.title3.weight(.bold))
+                                  .foregroundStyle(Color(red: 0.98, green: 0.30, blue: 0.40))
+                                  .symbolEffect(.variableColor.iterative, isActive: isPlaying)
+                          } else {
+                              Image(systemName: "play.fill")
+                                  .font(.subheadline)
+                                  .foregroundStyle(.white.opacity(0.5))
+                                  .padding(10)
+                                  .background(Color.white.opacity(0.08))
+                                  .clipShape(Circle())
+                          }
+                      }
+                      .padding(.horizontal, 12)
+                      .padding(.vertical, 10)
+                      .background(
+                          ZStack {
+                              RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                  .fill(Color(red: 0.10, green: 0.10, blue: 0.13).opacity(0.88))
+                              if isCurrent, let art = track.artworkURL, let url = URL(string: art) {
+                                  AsyncImage(url: url) { phase in
+                                      if case .success(let img) = phase {
+                                          img.resizable()
+                                              .scaledToFill()
+                                              .saturation(2.0)
+                                              .blur(radius: 36)
+                                              .opacity(0.32)
+                                      }
+                                  }
+                                  .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                              }
+                          }
+                      )
+                      .overlay(
+                          RoundedRectangle(cornerRadius: 16, style: .continuous)
+                              .stroke(isCurrent ? Color.white.opacity(0.35) : Color.white.opacity(0.06), lineWidth: isCurrent ? 1.2 : 0.6)
+                      )
+                      .environment(\\.layoutDirection, .leftToRight)
+                  }
+                  .buttonStyle(SmoothPressButtonStyle())
+              }
+          }
+
+          struct HarborMiniAudioPlayerBar: View {
+              @EnvironmentObject var store: HarborStore
+              @EnvironmentObject var audioManager: HarborAudioPlayerManager
+
+              var body: some View {
+                  if let track = audioManager.currentTrack {
+                      HStack(spacing: 12) {
+                          Button {
+                              audioManager.togglePlayPause()
+                          } label: {
+                              Image(systemName: audioManager.isPlaying ? "pause.fill" : "play.fill")
+                                  .font(.system(size: 19, weight: .bold))
+                                  .foregroundStyle(.white)
+                                  .frame(width: 36, height: 36)
+                          }
+                          .buttonStyle(SmoothPressButtonStyle())
+
+                          Button {
+                              audioManager.playNext()
+                          } label: {
+                              Image(systemName: "forward.fill")
+                                  .font(.system(size: 16, weight: .semibold))
+                                  .foregroundStyle(.white.opacity(0.75))
+                          }
+                          .buttonStyle(SmoothPressButtonStyle())
+
+                          Spacer()
+
+                          Button {
+                              audioManager.isShowingFullPlayer = true
+                          } label: {
+                              HStack(spacing: 10) {
+                                  VStack(alignment: .trailing, spacing: 2) {
+                                      Text(track.title)
+                                          .font(.system(size: 14, weight: .bold))
+                                          .foregroundStyle(.white)
+                                          .lineLimit(1)
+                                      Text(track.artist)
+                                          .font(.caption2)
+                                          .foregroundStyle(.white.opacity(0.70))
+                                          .lineLimit(1)
+                                  }
+
+                                  ArtworkRadiationContainer(
+                                      artworkURL: track.artworkURL,
+                                      isActive: audioManager.isPlaying,
+                                      glowRadius: 12,
+                                      scale: 1.35
+                                  ) {
+                                      AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
+                                          switch phase {
+                                          case .success(let img):
+                                              img.resizable().scaledToFill()
+                                          default:
+                                              ZStack {
+                                                  Color(red: 0.22, green: 0.22, blue: 0.26)
+                                                  Image(systemName: "music.note")
+                                                      .foregroundStyle(.white.opacity(0.7))
+                                              }
+                                          }
+                                      }
+                                      .frame(width: 40, height: 40)
+                                      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                  }
+                                  .frame(width: 42, height: 42)
+                              }
+                          }
+                          .buttonStyle(.plain)
+                      }
+                      .padding(.horizontal, 16)
+                      .padding(.vertical, 8)
+                      .background(
+                          ZStack {
+                              Capsule(style: .continuous)
+                                  .fill(.ultraThinMaterial)
+                              if let art = track.artworkURL, let url = URL(string: art) {
+                                  AsyncImage(url: url) { phase in
+                                      if case .success(let img) = phase {
+                                          img.resizable()
+                                              .scaledToFill()
+                                              .saturation(2.2)
+                                              .blur(radius: 28)
+                                              .opacity(audioManager.isPlaying ? 0.45 : 0.22)
+                                      }
+                                  }
+                                  .clipShape(Capsule(style: .continuous))
+                              }
+                          }
+                      )
+                      .overlay(
+                          Capsule(style: .continuous)
+                              .stroke(Color.white.opacity(0.22), lineWidth: 0.9)
+                      )
+                      .shadow(color: .black.opacity(0.55), radius: 14, y: 5)
+                      .padding(.horizontal, 18)
+                      .environment(\\.layoutDirection, .leftToRight)
+                  }
+              }
+          }
+
+          struct HarborFullMusicPlayerSheet: View {
+              @EnvironmentObject var store: HarborStore
+              @EnvironmentObject var audioManager: HarborAudioPlayerManager
+              @Environment(\\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      ZStack {
+                          Color.black.ignoresSafeArea()
+
+                          if let track = audioManager.currentTrack, let art = track.artworkURL, let url = URL(string: art) {
+                              AsyncImage(url: url) { phase in
+                                  if case .success(let img) = phase {
+                                      img.resizable()
+                                          .scaledToFill()
+                                          .frame(width: UIScreen.main.bounds.width, height: UIScreen.main.bounds.height)
+                                          .saturation(2.1)
+                                          .blur(radius: 75)
+                                          .opacity(0.55)
+                                          .ignoresSafeArea()
+                                  }
+                              }
+                          }
+
+                          VStack(spacing: 24) {
+                              Capsule()
+                                  .fill(Color.white.opacity(0.35))
+                                  .frame(width: 42, height: 5)
+                                  .padding(.top, 10)
+
+                              if let track = audioManager.currentTrack {
+                                  ArtworkRadiationContainer(
+                                      artworkURL: track.artworkURL,
+                                      isActive: audioManager.isPlaying,
+                                      glowRadius: 38,
+                                      scale: 1.32
+                                  ) {
+                                      AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
+                                          switch phase {
+                                          case .success(let image):
+                                              image.resizable().scaledToFill()
+                                          default:
+                                              ZStack {
+                                                  Color(red: 0.15, green: 0.15, blue: 0.20)
+                                                  Image(systemName: "waveform.circle.fill")
+                                                      .font(.system(size: 72))
+                                                      .foregroundStyle(.white)
+                                              }
+                                          }
+                                      }
+                                      .frame(width: 260, height: 260)
+                                      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                                      .overlay(
+                                          RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                              .stroke(Color.white.opacity(0.28), lineWidth: 1.2)
+                                      )
+                                      .scaleEffect(audioManager.isPlaying ? 1.02 : 0.92)
+                                      .animation(.spring(response: 0.45, dampingFraction: 0.72), value: audioManager.isPlaying)
+                                  }
+                                  .frame(width: 300, height: 290)
+
+                                  VStack(spacing: 6) {
+                                      Text(track.title)
+                                          .font(.title2.weight(.heavy))
+                                          .foregroundStyle(.white)
+                                          .multilineTextAlignment(.center)
+                                          .lineLimit(2)
+                                      Text(track.artist)
+                                          .font(.headline)
+                                          .foregroundStyle(.white.opacity(0.78))
+                                  }
+                                  .padding(.horizontal, 24)
+
+                                  if !track.isLiveStream {
+                                      VStack(spacing: 6) {
+                                          Slider(
+                                              value: Binding(
+                                                  get: { audioManager.currentTime },
+                                                  set: { audioManager.seek(to: $0) }
+                                              ),
+                                              in: 0...max(audioManager.duration, 1)
+                                          )
+                                          .tint(.white)
+
+                                          HStack {
+                                              Text(formatTime(audioManager.currentTime))
+                                                  .contentTransition(.numericText())
+                                              Spacer()
+                                              Text(formatTime(audioManager.duration))
+                                                  .contentTransition(.numericText())
+                                          }
+                                          .font(.caption2.weight(.semibold))
+                                          .foregroundStyle(.white.opacity(0.7))
+                                      }
+                                      .padding(.horizontal, 28)
+                                      .environment(\\.layoutDirection, .leftToRight)
+                                  }
+
+                                  HStack(spacing: 46) {
+                                      Button { audioManager.playPrevious() } label: {
+                                          Image(systemName: "backward.fill").font(.title)
+                                      }
+                                      .buttonStyle(SmoothPressButtonStyle())
+
+                                      Button { audioManager.togglePlayPause() } label: {
+                                          Image(systemName: audioManager.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                              .font(.system(size: 64))
+                                      }
+                                      .buttonStyle(SmoothPressButtonStyle())
+
+                                      Button { audioManager.playNext() } label: {
+                                          Image(systemName: "forward.fill").font(.title)
+                                      }
+                                      .buttonStyle(SmoothPressButtonStyle())
+                                  }
+                                  .foregroundStyle(.white)
+                                  .environment(\\.layoutDirection, .leftToRight)
+
+                                  VStack(alignment: .leading, spacing: 8) {
+                                      Label("Synced Lyrics · كلمات الأغنية", systemImage: "quote.bubble.fill")
+                                          .font(.caption.weight(.bold))
+                                          .foregroundStyle(.white.opacity(0.85))
+
+                                      ScrollView {
+                                          if !audioManager.syncedLyrics.isEmpty {
+                                              VStack(alignment: .leading, spacing: 10) {
+                                                  ForEach(audioManager.syncedLyrics) { line in
+                                                      let isActive = abs(line.timestampSeconds - audioManager.currentTime) < 3.0
+                                                      Text(line.text)
+                                                          .font(isActive ? .headline.weight(.bold) : .subheadline)
+                                                          .foregroundStyle(isActive ? .white : .white.opacity(0.50))
+                                                          .scaleEffect(isActive ? 1.03 : 1.0, anchor: .leading)
+                                                          .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
+                                                          .onTapGesture {
+                                                              audioManager.seek(to: line.timestampSeconds)
+                                                          }
+                                                  }
+                                              }
+                                              .frame(maxWidth: .infinity, alignment: .leading)
+                                          } else if let plain = audioManager.plainLyrics {
+                                              Text(plain)
+                                                  .font(.subheadline)
+                                                  .foregroundStyle(.white.opacity(0.85))
+                                          } else {
+                                              Text("استمتع بالصوت الكامل مع الإشعاع المحيطي لغلاف الألبوم.")
+                                                  .font(.caption)
+                                                  .foregroundStyle(.white.opacity(0.6))
+                                          }
+                                      }
+                                      .frame(maxHeight: 150)
+                                  }
+                                  .padding(14)
+                                  .background(.ultraThinMaterial)
+                                  .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                  .padding(.horizontal, 20)
+                              }
+                              Spacer()
+                          }
+                      }
+                      .toolbar {
+                          ToolbarItem(placement: .topBarTrailing) {
+                              Button("إغلاق") { dismiss() }
+                                  .foregroundStyle(.white)
+                          }
+                      }
+                  }
+              }
+
+              private func formatTime(_ secs: Double) -> String {
+                  let total = max(Int(secs), 0)
+                  return String(format: "%d:%02d", total / 60, total % 60)
+              }
+          }
+
+          '''
+
+          m_prefix = views_c[:views_c.index(music_start)]
+          m_suffix = views_c[views_c.index(books_start):]
+          views_c = m_prefix + apple_music_section + m_suffix
 
           views_c = views_c.replace(
               '.frame(height: 280)\n                    .clipped()',
@@ -1027,33 +1797,10 @@ jobs:
                                               .foregroundStyle(Color.black)
                                               .clipShape(Capsule())
                                           }
+                                          .buttonStyle(SmoothPressButtonStyle())
                                           .padding(.bottom, 8)
                                       }
                                       Text("مصادر البث المصنفة (Harbor Stream Engine)")'''
-          )
-
-          views_c = views_c.replace(
-              'HStack {\n                            HarborSectionHeader(title: "مكتبة الموسيقى والمقاطع الصوتية", icon: "music.note.list")',
-              '''ScrollView(.horizontal, showsIndicators: false) {
-                                          HStack(spacing: 8) {
-                                              ForEach(["الرائج الآن", "عبدالمجيد عبدالله", "عمرو دياب", "الشامي", "The Weeknd", "Travis Scott", "Lana Del Rey", "Hans Zimmer"], id: \\.self) { tag in
-                                                  Button {
-                                                      searchQuery = tag == "الرائج الآن" ? "Top Hits 2026" : tag
-                                                      Task { await store.searchMusic(query: searchQuery) }
-                                                  } label: {
-                                                      Text(tag)
-                                                          .font(.caption.weight(.bold))
-                                                          .padding(.horizontal, 12)
-                                                          .padding(.vertical, 7)
-                                                          .background(store.theme.backgroundSecondary)
-                                                          .foregroundStyle(.white)
-                                                          .clipShape(Capsule())
-                                                  }
-                                              }
-                                          }
-                                          .padding(.horizontal, 16)
-                                      }
-                                      HStack {\n                                HarborSectionHeader(title: "مكتبة الموسيقى والمقاطع الصوتية", icon: "music.note.list")'''
           )
 
           views_c = views_c.replace('VideoPlayer(player: player)', 'HarborSmartVideoContainer(url: url, player: player)')
@@ -1065,15 +1812,11 @@ jobs:
               '.searchable(text: $searchText, prompt: "ابحث عن فيلم، مسلسل، أو أنمي...")',
               '.searchable(text: $searchText, prompt: "ابحث عن فيلم، مسلسل، أو أنمي...")\n            .onSubmit(of: .search) { Task { await store.searchCatalogOnline(query: searchText) } }\n            .onChange(of: searchText) { _, q in if q.count >= 3 { Task { await store.searchCatalogOnline(query: q) } } }'
           )
-          views_c = views_c.replace(
-              'Text("\\(track.artist) • \\(track.album)")',
-              'Text("\\(track.artist) • \\(track.isLiveStream ? "بث مباشر 24/7" : String(format: "%d:%02d", Int(track.durationSeconds) / 60, Int(track.durationSeconds) % 60)) • \\(track.album)")'
-          )
 
           with open("Sources/HarborIOS/HarborViews.swift", "w", encoding="utf-8") as f:
               f.write(views_c)
 
-          print("iPhone 15 Pro Max Mawj UI + Multi-Engine Music + Cloud Streams patched successfully!")
+          print("All full readable Harbor iOS v2.2 patches applied cleanly!")
           PYEOF
 
           cat << 'EOF' > project.yml
@@ -1095,14 +1838,14 @@ jobs:
               info:
                 path: Info.plist
                 properties:
-                  CFBundleDisplayName: موج Harbor
+                  CFBundleDisplayName: Harbor
                   CFBundleName: HarborIOS
                   CFBundleExecutable: $(EXECUTABLE_NAME)
                   CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
                   CFBundleInfoDictionaryVersion: "6.0"
                   CFBundlePackageType: APPL
-                  CFBundleShortVersionString: "2.0.0"
-                  CFBundleVersion: "3"
+                  CFBundleShortVersionString: "2.2.0"
+                  CFBundleVersion: "5"
                   LSRequiresIPhoneOS: true
                   UIRequiresFullScreen: true
                   UIStatusBarStyle: UIStatusBarStyleLightContent
