@@ -12,7 +12,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Prepare Source Files
+      - name: Prepare Source Files and Project Spec
         run: |
           mkdir -p Sources/HarborIOS
           if [ -d "Harbor-iOS-SwiftUI/Sources/HarborIOS" ]; then
@@ -23,12 +23,61 @@ jobs:
             find . -maxdepth 2 -name "*.swift" -not -path "*/Sources/*" -not -name "Package.swift" -exec cp {} Sources/HarborIOS/ \;
           fi
           rm -f Sources/HarborIOS/Package.swift
+          rm -f Sources/HarborIOS/Info.plist
           if [ -f "Sources/HarborIOS/HarborIOS.swift" ] && [ -f "Sources/HarborIOS/HarborViews.swift" ]; then
             rm -f Sources/HarborIOS/HarborIOS.swift
           fi
-          if [ ! -f "project.yml" ] && [ -f "Harbor-iOS-SwiftUI/project.yml" ]; then
-            cp Harbor-iOS-SwiftUI/project.yml ./project.yml
-          fi
+
+          cat << 'EOF' > project.yml
+          name: HarborIOS
+          options:
+            bundleIdPrefix: com.harbor
+            deploymentTarget:
+              iOS: "17.0"
+          targets:
+            HarborIOS:
+              type: application
+              platform: iOS
+              deploymentTarget: "17.0"
+              sources:
+                - path: Sources/HarborIOS
+                  excludes:
+                    - "**/*.plist"
+                    - "Package.swift"
+              info:
+                path: Info.plist
+                properties:
+                  CFBundleDisplayName: Harbor
+                  CFBundleName: Harbor
+                  CFBundleExecutable: $(EXECUTABLE_NAME)
+                  CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+                  CFBundleInfoDictionaryVersion: "6.0"
+                  CFBundlePackageType: APPL
+                  CFBundleShortVersionString: "1.0.0"
+                  CFBundleVersion: "1"
+                  LSRequiresIPhoneOS: true
+                  UILaunchScreen: {}
+                  UIApplicationSupportsIndirectInputEvents: true
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  UIBackgroundModes:
+                    - audio
+                  NSAppTransportSecurity:
+                    NSAllowsArbitraryLoads: true
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.harbor.ios
+                  PRODUCT_NAME: HarborIOS
+                  SWIFT_VERSION: "5.0"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  GENERATE_INFOPLIST_FILE: NO
+                  CODE_SIGN_IDENTITY: ""
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGNING_ALLOWED: NO
+          EOF
+
           ls -la Sources/HarborIOS/
 
       - name: Select Xcode 16
@@ -48,24 +97,27 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      - name: Build Archive
+      - name: Build App Bundle
         run: |
-          xcodebuild archive \
+          xcodebuild build \
             -project HarborIOS.xcodeproj \
             -scheme HarborIOS \
             -configuration Release \
-            -archivePath build/HarborIOS.xcarchive \
-            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Package IPA
         run: |
+          APP_PATH=$(find build/DerivedData -name "HarborIOS.app" -type d | head -n 1)
+          echo "Found app at: $APP_PATH"
+          codesign --force --deep --sign - "$APP_PATH" || true
           mkdir -p build/Payload
-          cp -r build/HarborIOS.xcarchive/Products/Applications/HarborIOS.app build/Payload/Harbor.app
+          cp -r "$APP_PATH" build/Payload/Harbor.app
           cd build && zip -r Harbor.ipa Payload
+          ls -lh Harbor.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
