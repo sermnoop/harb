@@ -22,20 +22,13 @@ jobs:
           else
             find . -maxdepth 2 -name "*.swift" -not -path "*/Sources/*" -not -name "Package.swift" -exec cp {} Sources/HarborIOS/ \;
           fi
-
-          # منع تجميع ملف الإعدادات Package.swift داخل كود التطبيق
           rm -f Sources/HarborIOS/Package.swift
-
-          # منع تكرار الكود إذا وُجد الملف المجمّع مع الملفات المفردة
           if [ -f "Sources/HarborIOS/HarborIOS.swift" ] && [ -f "Sources/HarborIOS/HarborViews.swift" ]; then
             rm -f Sources/HarborIOS/HarborIOS.swift
           fi
-
           if [ ! -f "project.yml" ] && [ -f "Harbor-iOS-SwiftUI/project.yml" ]; then
             cp Harbor-iOS-SwiftUI/project.yml ./project.yml
           fi
-
-          echo "Files to compile:"
           ls -la Sources/HarborIOS/
 
       - name: Select Xcode 16
