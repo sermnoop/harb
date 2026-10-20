@@ -15,7 +15,6 @@ jobs:
       - name: Prepare Source Files
         run: |
           mkdir -p Sources/HarborIOS
-          # نقل ملفات السويفت إذا كانت في المجلد الرئيسي أو أي مجلد فرعي
           if [ -f "HarborIOS.swift" ]; then
             cp HarborIOS.swift Sources/HarborIOS/
           elif [ -d "Harbor-iOS-SwiftUI/Sources/HarborIOS" ]; then
@@ -23,15 +22,20 @@ jobs:
           else
             find . -maxdepth 2 -name "*.swift" -not -path "*/Sources/*" -exec cp {} Sources/HarborIOS/ \;
           fi
-          # التأكد من وجود project.yml في المجلد الرئيسي
           if [ ! -f "project.yml" ] && [ -f "Harbor-iOS-SwiftUI/project.yml" ]; then
             cp Harbor-iOS-SwiftUI/project.yml ./project.yml
           fi
-          echo "Source files in Sources/HarborIOS:"
-          ls -la Sources/HarborIOS/
 
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Select Xcode 16
+        run: |
+          if [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
