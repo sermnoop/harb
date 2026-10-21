@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
@@ -30,6 +33,9 @@ jobs:
           fi
 
           cat << 'EOF' >> Sources/HarborIOS/HarborStore.swift
+
+          import UIKit
+          import CoreGraphics
 
           // MARK: - Smooth Interactive Button Style
 
@@ -137,17 +143,216 @@ jobs:
           }
 
           let featuredHarborArtists: [HarborArtistSummary] = [
-              HarborArtistSummary(id: "art-weeknd", name: "The Weeknd", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/2b/b6/10/2bb61076-4091-1f8e-6b4d-899cf18339c9/20UMGIM11048.rgb.jpg/600x600bb.jpg", genre: "R&B / Synth Pop"),
-              HarborArtistSummary(id: "art-joji", name: "Joji", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/f3/61/09/f361099e-0938-f60e-7552-6c30c84d0c59/093624860471.jpg/600x600bb.jpg", genre: "Lo-Fi / Alternative R&B"),
-              HarborArtistSummary(id: "art-lana", name: "Lana Del Rey", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/5f/b1/e0/5fb1e079-c216-f8a4-2757-08819655029b/14UMGIM01914.rgb.jpg/600x600bb.jpg", genre: "Dream Pop / Indie"),
-              HarborArtistSummary(id: "art-travis", name: "Travis Scott", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/52/41/23/52412362-56f8-a143-17b0-9f36529a192a/196871341882.jpg/600x600bb.jpg", genre: "Hip-Hop / Trap"),
-              HarborArtistSummary(id: "art-abdulmajid", name: "عبدالمجيد عبدالله", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/c8/0e/38/c80e38c7-6b19-8267-3793-07621401189c/cover.jpg/600x600bb.jpg", genre: "طرب وخليجي"),
-              HarborArtistSummary(id: "art-rashed", name: "راشد الماجد", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/0f/10/92/0f109248-115e-8146-7f79-76749860260d/cover.jpg/600x600bb.jpg", genre: "خليجي"),
-              HarborArtistSummary(id: "art-amrdiab", name: "عمرو دياب", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/7b/5c/1c/7b5c1c3e-8932-4429-8930-5a538275d612/cover.jpg/600x600bb.jpg", genre: "بوب عربي"),
-              HarborArtistSummary(id: "art-ed", name: "Ed Sheeran", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/03/81/c3/0381c3a5-999f-8339-92f4-179025517513/190295851286.jpg/600x600bb.jpg", genre: "Pop / Acoustic"),
-              HarborArtistSummary(id: "art-billie", name: "Billie Eilish", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/92/9f/69/929f69f1-f975-3a14-4d80-66d111314242/24UMGIM36186.rgb.jpg/600x600bb.jpg", genre: "Alternative Pop"),
-              HarborArtistSummary(id: "art-zimmer", name: "Hans Zimmer", artworkURL: "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/f4/60/73/f4607358-219d-7196-3f1d-09910e6d231b/794043179747.jpg/600x600bb.jpg", genre: "Cinematic Scores")
+              HarborArtistSummary(id: "art-weeknd", name: "The Weeknd", artworkURL: nil, genre: "R&B / Synth Pop"),
+              HarborArtistSummary(id: "art-joji", name: "Joji", artworkURL: nil, genre: "Lo-Fi / Alternative R&B"),
+              HarborArtistSummary(id: "art-lana", name: "Lana Del Rey", artworkURL: nil, genre: "Dream Pop / Indie"),
+              HarborArtistSummary(id: "art-travis", name: "Travis Scott", artworkURL: nil, genre: "Hip-Hop / Trap"),
+              HarborArtistSummary(id: "art-cas", name: "Cigarettes After Sex", artworkURL: nil, genre: "Dream Pop / Ambient"),
+              HarborArtistSummary(id: "art-abdulmajid", name: "عبدالمجيد عبدالله", artworkURL: nil, genre: "طرب وخليجي"),
+              HarborArtistSummary(id: "art-rashed", name: "راشد الماجد", artworkURL: nil, genre: "خليجي"),
+              HarborArtistSummary(id: "art-amrdiab", name: "عمرو دياب", artworkURL: nil, genre: "بوب عربي"),
+              HarborArtistSummary(id: "art-billie", name: "Billie Eilish", artworkURL: nil, genre: "Alternative Pop"),
+              HarborArtistSummary(id: "art-zimmer", name: "Hans Zimmer", artworkURL: nil, genre: "Cinematic Scores")
           ]
+
+          // MARK: - Live Artist Portrait Resolver + Artwork Cache + Dominant Color Extractor
+
+          @MainActor
+          final class HarborArtworkService {
+              static let shared = HarborArtworkService()
+              private let imageCache = NSCache<NSString, UIImage>()
+              private var artistURLCache: [String: String] = [:]
+
+              func cachedImage(for key: String) -> UIImage? {
+                  imageCache.object(forKey: key as NSString)
+              }
+
+              func loadImage(from urlString: String?) async -> UIImage? {
+                  guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
+                        !raw.isEmpty,
+                        let url = URL(string: raw) else { return nil }
+                  if let cached = imageCache.object(forKey: raw as NSString) {
+                      return cached
+                  }
+                  var req = URLRequest(url: url)
+                  req.timeoutInterval = 4.0
+                  req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+                  guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                        let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                        let img = UIImage(data: data) else { return nil }
+                  imageCache.setObject(img, forKey: raw as NSString)
+                  return img
+              }
+
+              /// Resolves a guaranteed live Artist Portrait photo using Deezer Official Artist API (`picture_big`) + Apple iTunes Catalog fallback
+              func resolveArtistImage(artistName: String, initialURL: String? = nil) async -> UIImage? {
+                  let cleanName = artistName.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? artistName
+                  let cacheKey = "artist:\(cleanName.lowercased())"
+                  if let cached = imageCache.object(forKey: cacheKey as NSString) {
+                      return cached
+                  }
+
+                  // 1. Try initialURL if provided and valid
+                  if let initURL = initialURL, !initURL.isEmpty,
+                     let img = await loadImage(from: initURL) {
+                      imageCache.setObject(img, forKey: cacheKey as NSString)
+                      artistURLCache[cleanName.lowercased()] = initURL
+                      return img
+                  }
+
+                  // 2. Query Deezer Artist Portrait API + Apple iTunes Catalog in parallel
+                  let q = cleanName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cleanName
+                  async let deezerURLTask = fetchDeezerArtistPhotoURL(q)
+                  async let itunesURLTask = fetchITunesArtistPhotoURL(q)
+
+                  let (deezerURL, itunesURL) = await (deezerURLTask, itunesURLTask)
+                  for candidateURL in [deezerURL, itunesURL].compactMap({ $0 }) {
+                      if let img = await loadImage(from: candidateURL) {
+                          imageCache.setObject(img, forKey: cacheKey as NSString)
+                          artistURLCache[cleanName.lowercased()] = candidateURL
+                          return img
+                      }
+                  }
+                  return nil
+              }
+
+              func resolvedArtistURL(for artistName: String) -> String? {
+                  let cleanName = artistName.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? artistName
+                  return artistURLCache[cleanName.lowercased()]
+              }
+
+              private func fetchDeezerArtistPhotoURL(_ q: String) async -> String? {
+                  guard let url = URL(string: "https://api.deezer.com/search/artist?q=\(q)&limit=3") else { return nil }
+                  var req = URLRequest(url: url)
+                  req.timeoutInterval = 3.2
+                  guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                        let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        let items = root["data"] as? [[String: Any]],
+                        let first = items.first else { return nil }
+                  for key in ["picture_big", "picture_xl", "picture_medium"] {
+                      if let pic = first[key] as? String, pic.hasPrefix("http"), !pic.contains("/images/artist//") {
+                          return pic
+                      }
+                  }
+                  return nil
+              }
+
+              private func fetchITunesArtistPhotoURL(_ q: String) async -> String? {
+                  guard let url = URL(string: "https://itunes.apple.com/search?term=\(q)&country=SA&media=music&entity=song&limit=4") else { return nil }
+                  var req = URLRequest(url: url)
+                  req.timeoutInterval = 3.2
+                  guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                        let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        let items = root["results"] as? [[String: Any]] else { return nil }
+                  for item in items {
+                      if let art100 = item["artworkUrl100"] as? String, art100.hasPrefix("http") {
+                          return art100.replacingOccurrences(of: "100x100bb", with: "600x600bb")
+                      }
+                  }
+                  return nil
+              }
+
+              /// Extracts the most dominant color from a UIImage cover art (matching image_3.png ambient background)
+              nonisolated func extractDominantColors(from image: UIImage) -> (top: Color, middle: Color, bottom: Color) {
+                  guard let cgImage = image.cgImage else {
+                      return (
+                          Color(red: 0.22, green: 0.06, blue: 0.07),
+                          Color(red: 0.10, green: 0.03, blue: 0.04),
+                          Color.black
+                      )
+                  }
+
+                  let side = 28
+                  var rawPixels = [UInt8](repeating: 0, count: side * side * 4)
+                  let colorSpace = CGColorSpaceCreateDeviceRGB()
+                  guard let ctx = CGContext(
+                      data: &rawPixels,
+                      width: side,
+                      height: side,
+                      bitsPerComponent: 8,
+                      bytesPerRow: side * 4,
+                      space: colorSpace,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else {
+                      return (Color(red: 0.18, green: 0.06, blue: 0.06), Color(red: 0.08, green: 0.02, blue: 0.03), Color.black)
+                  }
+
+                  ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+
+                  struct Bucket {
+                      var weight: Double = 0
+                      var rSum: Double = 0
+                      var gSum: Double = 0
+                      var bSum: Double = 0
+                      var count: Double = 0
+                  }
+
+                  var buckets: [Int: Bucket] = [:]
+                  var fallbackR: Double = 0
+                  var fallbackG: Double = 0
+                  var fallbackB: Double = 0
+                  var fallbackCount: Double = 0
+
+                  for i in stride(from: 0, to: rawPixels.count, by: 4) {
+                      let a = Double(rawPixels[i + 3]) / 255.0
+                      if a < 0.5 { continue }
+                      let r = Double(rawPixels[i]) / 255.0
+                      let g = Double(rawPixels[i + 1]) / 255.0
+                      let b = Double(rawPixels[i + 2]) / 255.0
+
+                      fallbackR += r
+                      fallbackG += g
+                      fallbackB += b
+                      fallbackCount += 1
+
+                      let maxC = max(r, max(g, b))
+                      let minC = min(r, min(g, b))
+                      let sat = maxC > 0.001 ? (maxC - minC) / maxC : 0.0
+
+                      // Ignore extreme pure-black or pure-white border pixels when finding the dominant hue
+                      if maxC < 0.07 || minC > 0.94 { continue }
+
+                      let key = (Int(r * 7.99) << 6) | (Int(g * 7.99) << 3) | Int(b * 7.99)
+                      let w = 1.0 + (sat * 1.35)
+                      var bkt = buckets[key] ?? Bucket()
+                      bkt.weight += w
+                      bkt.rSum += r * w
+                      bkt.gSum += g * w
+                      bkt.bSum += b * w
+                      bkt.count += w
+                      buckets[key] = bkt
+                  }
+
+                  var winR = fallbackCount > 0 ? (fallbackR / fallbackCount) : 0.25
+                  var winG = fallbackCount > 0 ? (fallbackG / fallbackCount) : 0.08
+                  var winB = fallbackCount > 0 ? (fallbackB / fallbackCount) : 0.08
+
+                  if let best = buckets.values.max(by: { $0.weight < $1.weight }), best.count > 0 {
+                      winR = best.rSum / best.count
+                      winG = best.gSum / best.count
+                      winB = best.bSum / best.count
+                  }
+
+                  var hue: CGFloat = 0
+                  var sat: CGFloat = 0
+                  var bri: CGFloat = 0
+                  var alp: CGFloat = 1
+                  UIColor(red: CGFloat(winR), green: CGFloat(winG), blue: CGFloat(winB), alpha: 1.0)
+                      .getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alp)
+
+                  let topSat = min(max(sat * 1.15, sat > 0.06 ? 0.40 : sat), 0.90)
+                  let topBri = min(max(bri * 0.56, 0.24), 0.44)
+                  let midBri = min(max(topBri * 0.62, 0.14), 0.28)
+                  let botBri = min(max(topBri * 0.26, 0.05), 0.12)
+
+                  let topColor = Color(uiColor: UIColor(hue: hue, saturation: topSat, brightness: topBri, alpha: 1.0))
+                  let midColor = Color(uiColor: UIColor(hue: hue, saturation: topSat * 0.92, brightness: midBri, alpha: 1.0))
+                  let botColor = Color(uiColor: UIColor(hue: hue, saturation: topSat * 0.85, brightness: botBri, alpha: 1.0))
+                  return (topColor, midColor, botColor)
+              }
+          }
 
           // MARK: - Verified Exact-Match Audio Engine (Apple Catalog Truth + Strict Artist/Title/Duration Stream Matcher + YouTube Oct-2026 Innertube)
 
@@ -170,13 +375,12 @@ jobs:
                   return true
               }
 
-              /// Strict Primary Artist Verification: Ensures a song by "Welshly Arms" or "Karaoke Crew" is NEVER mistaken for "Joji"!
               static func strictArtistMatches(candidatePrimaryArtist: String, expectedArtist: String) -> Bool {
                   let cand = candidatePrimaryArtist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                   let exp = expectedArtist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                   guard !cand.isEmpty, !exp.isEmpty else { return false }
-                  for badArtist in ["karaoke", "tribute", "instrumental", "8-bit", "lullaby", "cover", "orchestra", "Geek Music", "piano"] {
-                      if cand.contains(badArtist.lowercased()) && !exp.contains(badArtist.lowercased()) {
+                  for badArtist in ["karaoke", "tribute", "instrumental", "8-bit", "lullaby", "cover", "orchestra", "geek music", "piano"] {
+                      if cand.contains(badArtist) && !exp.contains(badArtist) {
                           return false
                       }
                   }
@@ -186,7 +390,6 @@ jobs:
                   return false
               }
 
-              /// Strict Song Title Verification: Ensures "Sanctuary" only matches "Sanctuary" (not a random song!)
               static func strictTitleMatches(candidateTitle: String, expectedTitle: String) -> Bool {
                   let cClean = normalizeTitle(candidateTitle)
                   let eClean = normalizeTitle(expectedTitle)
@@ -230,11 +433,6 @@ jobs:
                             .replacingOccurrences(of: "_320.mp4", with: "_160.mp4")
               }
 
-              /// Authoritative Catalog Search:
-              /// 1. Queries Apple's Official Catalog (`itunes.apple.com/search`) + JioSaavn Direct in parallel.
-              /// 2. Every Apple catalog song is checked against JioSaavn using STRICT 3-Way Verification (Title + Primary Artist + Duration).
-              ///    - If JioSaavn has the 100% verified original vocal track, its pre-decrypted `_160.mp4` stream URL is attached for 0ms start!
-              ///    - If JioSaavn does NOT have the verified track (like `Joji - Sanctuary`), we do NOT attach a wrong/instrumental JioSaavn song! Instead we attach `harborfull://yt` (with the Apple backup stream stored safely in `genre` metadata if needed) so tapping it resolves the exact official vocal song from YouTube Music!
               static func searchFullLengthTracks(query: String) async -> [HarborMusicTrack] {
                   let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
 
@@ -248,14 +446,12 @@ jobs:
                   var combined: [HarborMusicTrack] = []
                   var seenKeys = Set<String>()
 
-                  // 1. Build from Apple's 100% Authentic Global Catalog first so titles, artists & covers are NEVER wrong!
                   if let officialList = appleTracks, !officialList.isEmpty {
                       for appleTrack in officialList {
                           let key = "\(normalizeTitle(appleTrack.title))|\(appleTrack.artist.lowercased().prefix(8))"
                           if seenKeys.contains(key) { continue }
                           seenKeys.insert(key)
 
-                          // Check if saavnPool has a STRICTLY VERIFIED match (Title + Primary Artist + Duration within 22s)
                           if let verifiedSaavn = saavnPool.first(where: { cand in
                               strictTitleMatches(candidateTitle: cand.title, expectedTitle: appleTrack.title) &&
                               strictArtistMatches(candidatePrimaryArtist: cand.artist, expectedArtist: appleTrack.artist) &&
@@ -275,13 +471,11 @@ jobs:
                                   )
                               )
                           } else {
-                              // JioSaavn does NOT have a verified match (e.g. Joji - Sanctuary) -> Mark for YouTube Official Audio resolution!
                               combined.append(appleTrack)
                           }
                       }
                   }
 
-                  // 2. Also append any verified JioSaavn tracks that weren't in the Apple result set (e.g. regional tracks)
                   for sTrack in saavnPool {
                       let key = "\(normalizeTitle(sTrack.title))|\(sTrack.artist.lowercased().prefix(8))"
                       if !seenKeys.contains(key) {
@@ -323,7 +517,6 @@ jobs:
                   }
               }
 
-              /// Smart Search: Returns categorized Artists, Albums, and 100% Authentic Songs
               static func performSmartSearch(query: String) async -> HarborSmartSearchResult {
                   let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
                   guard !trimmed.isEmpty else { return HarborSmartSearchResult() }
@@ -362,7 +555,6 @@ jobs:
                   return HarborSmartSearchResult(artists: artists, albums: albums, songs: songs)
               }
 
-              /// Fetches a full Artist Profile (Strictly filtered so ONLY songs & albums by that exact artist appear!)
               static func fetchArtistProfile(artistName: String, fallbackArtwork: String? = nil) async -> HarborArtistProfileData {
                   let cleanName = artistName.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? artistName
                   let q = cleanName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cleanName
@@ -371,10 +563,10 @@ jobs:
                   async let albumsTask = fetchAlbumsForQuery(q, artistFilter: cleanName)
 
                   let (rawSongs, albums) = await (songsTask, albumsTask)
-                  // Filter topSongs so ONLY tracks by this artist appear on their profile page!
                   let filteredSongs = rawSongs.filter { strictArtistMatches(candidatePrimaryArtist: $0.artist, expectedArtist: cleanName) }
                   let finalSongs = filteredSongs.isEmpty ? rawSongs : filteredSongs
-                  let heroArt = albums.first?.artworkURL ?? finalSongs.first?.artworkURL ?? fallbackArtwork
+                  let cachedPortrait = await MainActor.run { HarborArtworkService.shared.resolvedArtistURL(for: cleanName) }
+                  let heroArt = cachedPortrait ?? albums.first?.artworkURL ?? finalSongs.first?.artworkURL ?? fallbackArtwork
 
                   let summary = HarborArtistSummary(
                       id: "artist-\(cleanName.lowercased())",
@@ -385,7 +577,6 @@ jobs:
                   return HarborArtistProfileData(artist: summary, topSongs: finalSongs, albums: albums)
               }
 
-              /// Fetches all authentic tracks for a tapped Album and verifies each stream!
               static func fetchAlbumTracks(album: HarborAlbumSummary) async -> [HarborMusicTrack] {
                   if let colId = album.collectionId,
                      let lookupURL = URL(string: "https://itunes.apple.com/lookup?id=\(colId)&entity=song&limit=35") {
@@ -490,25 +681,18 @@ jobs:
                   return albums
               }
 
-              /// Resolves the 100% Verified Full-Length Stream for (title, artist, expectedDuration):
-              /// 1. Checks JioSaavn Direct + Saavn Mirrors ONLY if Primary Artist + Title + Duration strictly match!
-              /// 2. Queries YouTube Innertube Search (extracting both videoId AND visitorData) -> YouTube Innertube Player (`VISIONOS 1.02`, `IOS 21.26.4`, `TVHTML5_SIMPLY`) with exact `yt-dlp` Oct-2026 headers!
-              /// 3. Queries Piped / Invidious Audio APIs for that exact YouTube `videoId`.
-              /// 4. Returns `ytweb://VIDEO_ID` for the active WebKit YouTube player if direct HTTP extraction is blocked.
               static func resolveBestFullStream(title: String, artist: String, expectedDuration: Double = 200, currentStreamURL: String = "") async -> (url: String, duration: Double, youtubeVideoID: String?)? {
                   let cleanTitle = title.components(separatedBy: "(").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? title
                   let cleanArtist = artist.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? artist
                   let rawQuery = "\(cleanTitle) \(cleanArtist)"
                   let q = rawQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cleanTitle
 
-                  // Run Verified JioSaavn check and YouTube Innertube VideoID+VisitorData lookup in parallel!
                   async let saavnDirectTask = fromJioSaavnDirect(q, rawQuery: rawQuery)
                   async let saavnMirrorTask = fromSaavnMirrors(q, rawQuery: rawQuery)
                   async let ytSearchTask = searchYouTubeVideoWithVisitorData(title: cleanTitle, artist: cleanArtist)
 
                   let (s1List, s2List, ytInfo) = await (saavnDirectTask, saavnMirrorTask, ytSearchTask)
 
-                  // 1. Check JioSaavn Direct + Mirror with STRICT 3-Way Verification (Title + Primary Artist + Duration!)
                   for pool in [s1List ?? [], s2List ?? []] {
                       if let verified = pool.first(where: { cand in
                           strictTitleMatches(candidateTitle: cand.title, expectedTitle: cleanTitle) &&
@@ -519,7 +703,6 @@ jobs:
                       }
                   }
 
-                  // 2. If JioSaavn did NOT have a verified original vocal match (e.g. Joji - Sanctuary), resolve via YouTube Oct-2026 Innertube!
                   if let yt = ytInfo {
                       if let directYT = await resolveYouTubeInnertubePlayerStream(videoId: yt.videoId, visitorData: yt.visitorData) {
                           return (directYT.url, max(directYT.duration, expectedDuration), yt.videoId)
@@ -527,7 +710,6 @@ jobs:
                       if let pipedURL = await resolvePipedOrInvidiousStream(videoId: yt.videoId) {
                           return (pipedURL, expectedDuration, yt.videoId)
                       }
-                      // Return ytweb:// with backup info so WebAudio player + backup work seamlessly
                       return ("ytweb://\(yt.videoId)", expectedDuration, yt.videoId)
                   }
 
@@ -539,7 +721,6 @@ jobs:
                   return info?.videoId
               }
 
-              /// Searches YouTube Innertube for the official audio track and extracts both the 11-char `videoId` and `visitorData`
               private static func searchYouTubeVideoWithVisitorData(title: String, artist: String) async -> (videoId: String, visitorData: String?)? {
                   guard let url = URL(string: "https://www.youtube.com/youtubei/v1/search?prettyPrint=false") else { return nil }
                   var req = URLRequest(url: url)
@@ -568,7 +749,6 @@ jobs:
                         let http = resp as? HTTPURLResponse, http.statusCode == 200,
                         let rawText = String(data: data, encoding: .utf8) else { return nil }
 
-                  // Extract visitorData for subsequent /player calls
                   var visitorData: String? = nil
                   if let vRegex = try? NSRegularExpression(pattern: #"\"visitorData\":\"([^\"]+)\""#),
                      let vMatch = vRegex.firstMatch(in: rawText, range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)),
@@ -576,7 +756,7 @@ jobs:
                       visitorData = String(rawText[vRange])
                   }
 
-                  let pattern = #"\"videoRenderer\":\{\"videoId\":\"([a-zA-Z0-9_-]{11})\".*?\"title\":\{\"runs\":\[\{\"text\":\"([^\"]+)\""#
+                  let pattern = #"\"videoRenderer\":\{\"videoId\":\"([a-zA-Z0-9_-]{11})\".*?\"title\":\{\"runs\":\[\{\"text\":\"([^\"]+)\""# // }}}
                   guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
                   let nsRange = NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)
                   let matches = regex.matches(in: rawText, range: nsRange)
@@ -593,7 +773,6 @@ jobs:
                   return nil
               }
 
-              /// Uses the exact October 2026 `yt-dlp` `_INNERTUBE_CLIENTS` (`VISIONOS 1.02`, `IOS 21.26.4`, `TVHTML5_SIMPLY 1.0`) + `X-Goog-Visitor-Id`
               static func resolveYouTubeInnertubePlayerStream(videoId: String, visitorData: String?) async -> (url: String, duration: Double)? {
                   struct ClientSpec {
                       let name: String
@@ -684,7 +863,6 @@ jobs:
                       let lengthSecs = Double((videoDetails?["lengthSeconds"] as? String) ?? "") ?? 200.0
                       guard lengthSecs >= 45 else { continue }
 
-                      // 1. Prefer direct audio/mp4 (itag 140)
                       if let adaptive = streamingData["adaptiveFormats"] as? [[String: Any]] {
                           if let m4a = adaptive.first(where: {
                               let mime = ($0["mimeType"] as? String) ?? ""
@@ -695,12 +873,10 @@ jobs:
                           }
                       }
 
-                      // 2. Check hlsManifestUrl (.m3u8 native Apple AVPlayer stream)
                       if let hls = streamingData["hlsManifestUrl"] as? String, hls.hasPrefix("http") {
                           return (hls, lengthSecs)
                       }
 
-                      // 3. Check standard muxed mp4 formats
                       if let formats = streamingData["formats"] as? [[String: Any]],
                          let firstFmt = formats.first(where: { (($0["url"] as? String) ?? "").hasPrefix("http") }),
                          let directURL = firstFmt["url"] as? String {
@@ -748,7 +924,6 @@ jobs:
                       let title = clean((item["title"] as? String) ?? (item["song"] as? String) ?? "Song")
                       let subtitle = clean((item["subtitle"] as? String) ?? "")
 
-                      // Extract ONLY primary_artists or singers (NEVER subtitle, because karaoke tracks put "Originally by Joji" in subtitle!)
                       var primaryArtist = ""
                       if let artistMap = info?["artistMap"] as? [String: Any],
                          let primary = artistMap["primary_artists"] as? [[String: Any]],
@@ -1142,15 +1317,15 @@ jobs:
                       }
                       .stroke(
                           LinearGradient(
-                              colors: [Color(red: 0.16, green: 0.82, blue: 0.60).opacity(0.35),
-                                       Color(red: 0.16, green: 0.82, blue: 0.60),
-                                       Color(red: 0.16, green: 0.82, blue: 0.60).opacity(0.35)],
+                              colors: [Color.white.opacity(0.45).opacity(0.35),
+                                       Color.white.opacity(0.45),
+                                       Color.white.opacity(0.45).opacity(0.35)],
                               startPoint: .leading,
                               endPoint: .trailing
                           ),
                           style: StrokeStyle(lineWidth: 2.0, lineCap: .round)
                       )
-                      .shadow(color: Color(red: 0.16, green: 0.82, blue: 0.60).opacity(0.6), radius: 6, y: 2)
+                      .shadow(color: Color.white.opacity(0.45).opacity(0.6), radius: 6, y: 2)
                   }
                   .frame(height: 22)
               }
@@ -1189,11 +1364,11 @@ jobs:
                                   .resizable()
                                   .scaledToFit()
                                   .frame(width: 36, height: 36)
-                                  .foregroundStyle(selectedTab == .settings ? Color(red: 0.20, green: 0.88, blue: 0.62) : .white.opacity(0.85))
+                                  .foregroundStyle(selectedTab == .settings ? Color.white : .white.opacity(0.85))
                           }
                           .overlay(
                               Circle()
-                                  .stroke(selectedTab == .settings ? Color(red: 0.20, green: 0.88, blue: 0.62) : Color.white.opacity(0.25), lineWidth: 1.5)
+                                  .stroke(selectedTab == .settings ? Color.white : Color.white.opacity(0.25), lineWidth: 1.5)
                           )
                       }
                       .buttonStyle(SmoothPressButtonStyle(scaleAmount: 0.90))
@@ -1210,9 +1385,9 @@ jobs:
                                   ZStack {
                                       if isSelected {
                                           Capsule()
-                                              .fill(Color(red: 0.20, green: 0.88, blue: 0.62))
+                                              .fill(Color.white)
                                               .frame(width: 20, height: 3.5)
-                                              .shadow(color: Color(red: 0.20, green: 0.88, blue: 0.62), radius: 5)
+                                              .shadow(color: Color.white, radius: 5)
                                               .matchedGeometryEffect(id: "ActiveTabArc", in: tabAnimation)
                                       } else {
                                           Color.clear.frame(width: 20, height: 3.5)
@@ -1234,7 +1409,7 @@ jobs:
                   .background(
                       ZStack {
                           Capsule(style: .continuous)
-                              .fill(Color(red: 0.10, green: 0.10, blue: 0.13).opacity(0.88))
+                              .fill(Color(white: 0.05).opacity(0.95))
                           Capsule(style: .continuous)
                               .fill(.ultraThinMaterial)
                       }
@@ -1653,6 +1828,22 @@ jobs:
                           let cmEcho = CMTime(seconds: max(seconds - 0.068, 0), preferredTimescale: 600)
                           reverbEchoPlayer?.seek(to: cmEcho, toleranceBefore: .zero, toleranceAfter: .zero)
                       }
+                  }
+              }
+
+              func replayCurrentTrack() {
+                  seek(to: 0)
+                  if isUsingWebAudioFallback {
+                      isPlaying = true
+                      return
+                  }
+                  if let player = player {
+                      player.play()
+                      player.rate = playbackSpeed
+                      isPlaying = true
+                      applyLiveDSPToActivePlayers(forceResyncReverb: true)
+                  } else if let track = currentTrack {
+                      play(track: track, queue: queue)
                   }
               }
 
@@ -2097,7 +2288,7 @@ jobs:
 
           store_c = store_c.replace(
               'import SwiftUI\nimport Foundation',
-              'import SwiftUI\nimport Foundation\nimport AVFoundation\nimport AVKit\nimport WebKit\nimport CommonCrypto'
+              'import SwiftUI\nimport UIKit\nimport CoreGraphics\nimport Foundation\nimport AVFoundation\nimport AVKit\nimport WebKit\nimport CommonCrypto'
           )
           store_c = store_c.replace(
               'await searchMusic(query: "Hans Zimmer Soundtrack")',
@@ -2115,8 +2306,37 @@ jobs:
               'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }',
               'func searchMusic(query: String) async {\n        isLoadingMusic = true\n        defer { isLoadingMusic = false }\n        let fullTracks = await JioSaavnStreamCrypto.searchFullLengthTracks(query: query)\n        if !fullTracks.isEmpty {\n            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {\n                self.musicTracks = fullTracks\n            }\n        }\n        return'
           )
+          store_c = store_c.replace(
+              '@AppStorage("harbor.theme") var selectedThemeRaw: String = HarborThemePreset.harbor.rawValue',
+              '@AppStorage("harbor.theme.noir.v28") var selectedThemeRaw: String = HarborThemePreset.noir.rawValue'
+          )
+          store_c = store_c.replace(
+              'HarborThemePreset(rawValue: selectedThemeRaw) ?? .harbor',
+              'HarborThemePreset(rawValue: selectedThemeRaw) ?? .noir'
+          )
           with open("Sources/HarborIOS/HarborStore.swift", "w", encoding="utf-8") as f:
               f.write(store_c)
+
+          with open("Sources/HarborIOS/Models.swift", "r", encoding="utf-8") as f:
+              models_c = f.read()
+          models_c = models_c.replace(
+              "case .harbor:  return Color(red: 0.05, green: 0.07, blue: 0.12)",
+              "case .harbor:  return Color.black"
+          ).replace(
+              "case .noir:    return Color(red: 0.04, green: 0.04, blue: 0.05)",
+              "case .noir:    return Color.black"
+          ).replace(
+              "case .harbor:  return Color(red: 0.09, green: 0.13, blue: 0.20)",
+              "case .harbor:  return Color(white: 0.07)"
+          ).replace(
+              "case .noir:    return Color(red: 0.10, green: 0.10, blue: 0.12)",
+              "case .noir:    return Color(white: 0.07)"
+          ).replace(
+              "case .noir:    return Color(red: 0.90, green: 0.90, blue: 0.92)",
+              "case .noir:    return Color.white"
+          )
+          with open("Sources/HarborIOS/Models.swift", "w", encoding="utf-8") as f:
+              f.write(models_c)
 
           with open("Sources/HarborIOS/HarborStreamEngine.swift", "r", encoding="utf-8") as f:
               eng_c = f.read()
@@ -2239,7 +2459,7 @@ jobs:
                   .environmentObject(store)
                   .environmentObject(audioManager)
                   .preferredColorScheme(.dark)
-                  .sheet(isPresented: $audioManager.isShowingFullPlayer) {
+                  .fullScreenCover(isPresented: $audioManager.isShowingFullPlayer) {
                       HarborFullMusicPlayerSheet()
                           .environmentObject(store)
                           .environmentObject(audioManager)
@@ -2257,7 +2477,7 @@ jobs:
               var body: some View {
                   NavigationStack {
                       ZStack(alignment: .top) {
-                          Color(red: 0.02, green: 0.02, blue: 0.03).ignoresSafeArea()
+                          Color.black.ignoresSafeArea()
 
                           ScrollView(.vertical, showsIndicators: false) {
                               VStack(alignment: .leading, spacing: 18) {
@@ -2419,7 +2639,7 @@ jobs:
                               Color.black.opacity(0.45),
                               Color.clear,
                               Color.black.opacity(0.75),
-                              Color(red: 0.02, green: 0.02, blue: 0.03)
+                              Color.black
                           ],
                           startPoint: .top,
                           endPoint: .bottom
@@ -2531,7 +2751,7 @@ jobs:
                                       .clipped()
                               default:
                                   ZStack {
-                                      Color(red: 0.10, green: 0.11, blue: 0.15)
+                                      Color(white: 0.07)
                                       Image(systemName: "film")
                                           .font(.title)
                                           .foregroundStyle(.white.opacity(0.3))
@@ -2553,7 +2773,7 @@ jobs:
                                   .font(.system(size: 10, weight: .bold))
                                   .padding(.horizontal, 9)
                                   .padding(.vertical, 3.5)
-                                  .background(Color(red: 0.22, green: 0.24, blue: 0.30).opacity(0.92))
+                                  .background(Color(white: 0.12).opacity(0.92))
                                   .foregroundStyle(.white)
                                   .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                                   .padding(.top, 6)
@@ -2642,6 +2862,49 @@ jobs:
               }
           }
 
+          // MARK: - Self-Healing Live Artist Portrait Avatar View (Fetches Real Artist Photos via Deezer + Apple Catalog)
+
+          struct HarborArtistAvatarView: View {
+              let artistName: String
+              let initialURL: String?
+              let size: CGFloat
+              var borderColor: Color = Color.white.opacity(0.18)
+
+              @State private var loadedImage: UIImage? = nil
+
+              var body: some View {
+                  ZStack {
+                      if let img = loadedImage {
+                          Image(uiImage: img)
+                              .resizable()
+                              .scaledToFill()
+                              .frame(width: size, height: size)
+                              .clipped()
+                      } else {
+                          ZStack {
+                              Color(white: 0.08)
+                              Text(String(artistName.prefix(1)).uppercased())
+                                  .font(.system(size: size * 0.36, weight: .black, design: .rounded))
+                                  .foregroundStyle(.white.opacity(0.65))
+                          }
+                          .frame(width: size, height: size)
+                      }
+                  }
+                  .frame(width: size, height: size)
+                  .clipShape(Circle())
+                  .overlay(
+                      Circle().stroke(borderColor, lineWidth: 1.2)
+                  )
+                  .task(id: artistName) {
+                      if let img = await HarborArtworkService.shared.resolveArtistImage(artistName: artistName, initialURL: initialURL) {
+                          withAnimation(.easeInOut(duration: 0.22)) {
+                              self.loadedImage = img
+                          }
+                      }
+                  }
+              }
+          }
+
           struct HarborMusicRoomView: View {
               @EnvironmentObject var store: HarborStore
               @EnvironmentObject var audioManager: HarborAudioPlayerManager
@@ -2662,19 +2925,7 @@ jobs:
               var body: some View {
                   NavigationStack {
                       ZStack(alignment: .top) {
-                          Color(red: 0.03, green: 0.04, blue: 0.06).ignoresSafeArea()
-
-                          LinearGradient(
-                              colors: [
-                                  store.theme.accent.opacity(0.20),
-                                  Color(red: 0.07, green: 0.09, blue: 0.18).opacity(0.24),
-                                  .clear
-                              ],
-                              startPoint: .topLeading,
-                              endPoint: .bottomTrailing
-                          )
-                          .frame(width: screenW, height: 240)
-                          .ignoresSafeArea()
+                          Color.black.ignoresSafeArea()
 
                           if audioManager.isUsingWebAudioFallback, let vid = audioManager.activeYouTubeVideoID {
                               HarborHiddenWebAudioBridge(videoID: vid, isPlaying: audioManager.isPlaying)
@@ -2684,7 +2935,7 @@ jobs:
 
                           ScrollView(.vertical, showsIndicators: false) {
                               VStack(alignment: .leading, spacing: 20) {
-                                  // 1. Clean BitChord × Harbor Top Header + Instant DSP Mode Menu
+                                  // 1. Clean Noir Top Header + Instant DSP Mode Menu
                                   HStack(alignment: .center, spacing: 10) {
                                       Menu {
                                           ForEach(HarborAudioDSPPreset.allCases) { preset in
@@ -2705,12 +2956,12 @@ jobs:
                                           .padding(.vertical, 8)
                                           .background(
                                               audioManager.dspPreset == .normal
-                                                  ? Color.white.opacity(0.09)
-                                                  : store.theme.accent
+                                                  ? Color(white: 0.10)
+                                                  : Color.white
                                           )
                                           .foregroundStyle(audioManager.dspPreset == .normal ? Color.white : Color.black)
                                           .clipShape(Capsule())
-                                          .overlay(Capsule().stroke(Color.white.opacity(0.15), lineWidth: 0.8))
+                                          .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.8))
                                       }
 
                                       Spacer()
@@ -2721,14 +2972,14 @@ jobs:
                                               .foregroundStyle(.white)
                                           Text("BITCHORD × HARBOR SONIC STUDIO")
                                               .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                              .foregroundStyle(store.theme.accent)
+                                              .foregroundStyle(.white.opacity(0.55))
                                       }
                                   }
                                   .padding(.horizontal, 18)
                                   .padding(.top, 8)
                                   .environment(\.layoutDirection, .leftToRight)
 
-                                  // 2. Smart Instant Search Bar (Debounced Categorized Search: Artists + Albums + Songs)
+                                  // 2. Smart Instant Search Bar (True Noir Black Surface)
                                   HStack(spacing: 10) {
                                       if !searchQuery.isEmpty {
                                           Button {
@@ -2741,10 +2992,10 @@ jobs:
                                                   .foregroundStyle(.white.opacity(0.6))
                                           }
                                       } else if isSearchingSmart {
-                                          ProgressView().tint(store.theme.accent).scaleEffect(0.8)
+                                          ProgressView().tint(.white).scaleEffect(0.8)
                                       } else {
                                           Image(systemName: "sparkles")
-                                              .foregroundStyle(store.theme.accent)
+                                              .foregroundStyle(.white.opacity(0.8))
                                       }
 
                                       TextField("بحث ذكي: اكتب اسم أغنية، فنان، أو ألبوم...", text: $searchQuery)
@@ -2789,19 +3040,19 @@ jobs:
                                   }
                                   .padding(.horizontal, 16)
                                   .padding(.vertical, 12)
-                                  .background(Color(red: 0.09, green: 0.11, blue: 0.16).opacity(0.95))
+                                  .background(Color(white: 0.07))
                                   .clipShape(Capsule())
-                                  .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.8))
+                                  .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.8))
                                   .padding(.horizontal, 16)
                                   .environment(\.layoutDirection, .leftToRight)
 
-                                  // 3. If Smart Search has Categorized Artists or Albums, display them cleanly!
+                                  // 3. Categorized Smart Search Results (Artists + Albums)
                                   if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                       if !smartResults.artists.isEmpty {
                                           VStack(alignment: .leading, spacing: 10) {
                                               Text("الفنانون المطابقون · اضغط لعرض الصفحة والألبومات")
                                                   .font(.caption.weight(.bold))
-                                                  .foregroundStyle(store.theme.accent)
+                                                  .foregroundStyle(.white.opacity(0.75))
                                                   .padding(.horizontal, 18)
 
                                               ScrollView(.horizontal, showsIndicators: false) {
@@ -2811,16 +3062,11 @@ jobs:
                                                               selectedArtistForProfile = artist
                                                           } label: {
                                                               HStack(spacing: 10) {
-                                                                  AsyncImage(url: URL(string: artist.artworkURL ?? "")) { phase in
-                                                                      switch phase {
-                                                                      case .success(let img):
-                                                                          img.resizable().scaledToFill()
-                                                                      default:
-                                                                          Color(red: 0.15, green: 0.18, blue: 0.25)
-                                                                      }
-                                                                  }
-                                                                  .frame(width: 44, height: 44)
-                                                                  .clipShape(Circle())
+                                                                  HarborArtistAvatarView(
+                                                                      artistName: artist.name,
+                                                                      initialURL: artist.artworkURL,
+                                                                      size: 44
+                                                                  )
 
                                                                   VStack(alignment: .leading, spacing: 2) {
                                                                       Text(artist.name)
@@ -2828,12 +3074,12 @@ jobs:
                                                                           .foregroundStyle(.white)
                                                                       Text("صفحة الفنان والألبومات ›")
                                                                           .font(.system(size: 10.5, weight: .semibold))
-                                                                          .foregroundStyle(store.theme.accent)
+                                                                          .foregroundStyle(.white.opacity(0.65))
                                                                   }
                                                               }
                                                               .padding(.horizontal, 12)
                                                               .padding(.vertical, 8)
-                                                              .background(Color.white.opacity(0.07))
+                                                              .background(Color(white: 0.08))
                                                               .clipShape(Capsule())
                                                               .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.8))
                                                           }
@@ -2865,7 +3111,7 @@ jobs:
                                                                       case .success(let img):
                                                                           img.resizable().scaledToFill()
                                                                       default:
-                                                                          Color(red: 0.12, green: 0.14, blue: 0.20)
+                                                                          Color(white: 0.08)
                                                                       }
                                                                   }
                                                                   .frame(width: 124, height: 124)
@@ -2893,7 +3139,7 @@ jobs:
                                           }
                                       }
                                   } else {
-                                      // 4. Featured Artists Rail (Opens Dedicated Artist Profile Page — Never Stuffs Search Box!)
+                                      // 4. Featured Artists Rail (Live Portraits via HarborArtistAvatarView!)
                                       VStack(alignment: .leading, spacing: 12) {
                                           HStack {
                                               Text("فنانون مميزون · Artists")
@@ -2914,32 +3160,13 @@ jobs:
                                                           selectedArtistForProfile = artist
                                                       } label: {
                                                           VStack(spacing: 8) {
-                                                              AsyncImage(url: URL(string: artist.artworkURL ?? "")) { phase in
-                                                                  switch phase {
-                                                                  case .success(let img):
-                                                                      img.resizable().scaledToFill()
-                                                                  default:
-                                                                      ZStack {
-                                                                          Color(red: 0.14, green: 0.16, blue: 0.24)
-                                                                          Image(systemName: "music.mic")
-                                                                              .font(.title2)
-                                                                              .foregroundStyle(store.theme.accent)
-                                                                      }
-                                                                  }
-                                                              }
-                                                              .frame(width: 78, height: 78)
-                                                              .clipShape(Circle())
-                                                              .overlay(
-                                                                  Circle().stroke(
-                                                                      LinearGradient(
-                                                                          colors: [store.theme.accent, Color.white.opacity(0.12)],
-                                                                          startPoint: .topLeading,
-                                                                          endPoint: .bottomTrailing
-                                                                      ),
-                                                                      lineWidth: 1.5
-                                                                  )
+                                                              HarborArtistAvatarView(
+                                                                  artistName: artist.name,
+                                                                  initialURL: artist.artworkURL,
+                                                                  size: 78,
+                                                                  borderColor: Color.white.opacity(0.22)
                                                               )
-                                                              .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
+                                                              .shadow(color: .black.opacity(0.6), radius: 6, y: 3)
 
                                                               Text(artist.name)
                                                                   .font(.system(size: 12, weight: .bold))
@@ -2956,7 +3183,7 @@ jobs:
                                           .environment(\.layoutDirection, .leftToRight)
                                       }
 
-                                      // 5. Mood Filter Pills (Loads mood playlist in background WITHOUT polluting search bar!)
+                                      // 5. Mood Filter Pills (True Noir Black & White Contrast)
                                       ScrollView(.horizontal, showsIndicators: false) {
                                           HStack(spacing: 10) {
                                               ForEach(personalMusicMoods) { mood in
@@ -2975,10 +3202,10 @@ jobs:
                                                       }
                                                       .padding(.horizontal, 15)
                                                       .padding(.vertical, 9)
-                                                      .background(isSelected ? store.theme.accent : Color.white.opacity(0.07))
+                                                      .background(isSelected ? Color.white : Color(white: 0.08))
                                                       .foregroundStyle(isSelected ? Color.black : Color.white)
                                                       .clipShape(Capsule())
-                                                      .overlay(Capsule().stroke(Color.white.opacity(isSelected ? 0 : 0.12), lineWidth: 0.8))
+                                                      .overlay(Capsule().stroke(Color.white.opacity(isSelected ? 0 : 0.10), lineWidth: 0.8))
                                                   }
                                                   .buttonStyle(SmoothPressButtonStyle())
                                               }
@@ -2988,7 +3215,7 @@ jobs:
                                       .environment(\.layoutDirection, .leftToRight)
                                   }
 
-                                  // 6. BitChord Quick-Pick 2-Column Compact Grid
+                                  // 6. BitChord Quick-Pick 2-Column Compact Grid (True Noir Cards)
                                   if store.musicTracks.count >= 4 && searchQuery.isEmpty {
                                       VStack(alignment: .leading, spacing: 10) {
                                           HStack {
@@ -3014,9 +3241,9 @@ jobs:
                                                                       .frame(width: 50, height: 50).clipped()
                                                               default:
                                                                   ZStack {
-                                                                      Color(red: 0.14, green: 0.16, blue: 0.22)
+                                                                      Color(white: 0.10)
                                                                       Image(systemName: "music.note")
-                                                                          .foregroundStyle(store.theme.accent)
+                                                                          .foregroundStyle(.white.opacity(0.7))
                                                                   }
                                                                   .frame(width: 50, height: 50)
                                                               }
@@ -3026,21 +3253,21 @@ jobs:
                                                           VStack(alignment: .leading, spacing: 2) {
                                                               Text(item.title)
                                                                   .font(.system(size: 12.5, weight: .bold))
-                                                                  .foregroundStyle(isCurrent ? store.theme.accent : .white)
+                                                                  .foregroundStyle(.white)
                                                                   .lineLimit(1)
                                                               Text(item.artist)
                                                                   .font(.system(size: 10.5, weight: .medium))
-                                                                  .foregroundStyle(.white.opacity(0.58))
+                                                                  .foregroundStyle(.white.opacity(0.55))
                                                                   .lineLimit(1)
                                                           }
                                                           Spacer(minLength: 4)
                                                       }
                                                       .frame(height: 50)
-                                                      .background(Color(red: 0.09, green: 0.11, blue: 0.16).opacity(0.94))
+                                                      .background(Color(white: 0.07))
                                                       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                                       .overlay(
                                                           RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                              .stroke(isCurrent ? store.theme.accent : Color.white.opacity(0.08), lineWidth: isCurrent ? 1.4 : 0.6)
+                                                              .stroke(isCurrent ? Color.white.opacity(0.7) : Color.white.opacity(0.08), lineWidth: isCurrent ? 1.3 : 0.6)
                                                       )
                                                   }
                                                   .buttonStyle(SmoothPressButtonStyle())
@@ -3051,7 +3278,7 @@ jobs:
                                       }
                                   }
 
-                                  // 7. Full Songs List (With Tappable Artist Name on Every Row!)
+                                  // 7. Full Songs List
                                   VStack(alignment: .leading, spacing: 12) {
                                       HStack {
                                           Text(searchQuery.isEmpty ? activeCategoryName : "نتائج الأغاني الكاملة")
@@ -3059,7 +3286,7 @@ jobs:
                                               .foregroundStyle(.white)
                                           Spacer()
                                           if store.isLoadingMusic || isSearchingSmart {
-                                              ProgressView().tint(store.theme.accent)
+                                              ProgressView().tint(.white)
                                           } else {
                                               Text("\(store.musicTracks.count) أغنية")
                                                   .font(.caption.weight(.semibold))
@@ -3119,7 +3346,7 @@ jobs:
               }
           }
 
-          // MARK: - Dedicated Artist Profile View (Opens Latest Songs & Official Albums/EPs on Artist Tap!)
+          // MARK: - Dedicated Artist Profile View (Noir Black-on-Black + Live Artist Portrait Banner)
 
           struct HarborArtistDetailView: View {
               @EnvironmentObject var store: HarborStore
@@ -3128,36 +3355,40 @@ jobs:
 
               @State private var topSongs: [HarborMusicTrack] = []
               @State private var albums: [HarborAlbumSummary] = []
+              @State private var artistPortrait: UIImage? = nil
               @State private var isLoadingProfile: Bool = true
               @State private var selectedAlbum: HarborAlbumSummary? = nil
 
               var body: some View {
                   ZStack(alignment: .top) {
-                      Color(red: 0.03, green: 0.04, blue: 0.06).ignoresSafeArea()
+                      Color.black.ignoresSafeArea()
 
                       ScrollView(.vertical, showsIndicators: false) {
                           VStack(alignment: .leading, spacing: 22) {
-                              // Artist Hero Banner
                               ZStack(alignment: .bottomLeading) {
-                                  AsyncImage(url: URL(string: albums.first?.artworkURL ?? topSongs.first?.artworkURL ?? artistSummary.artworkURL ?? "")) { phase in
-                                      switch phase {
-                                      case .success(let img):
-                                          img.resizable().scaledToFill()
-                                              .frame(width: UIScreen.main.bounds.width, height: 290)
-                                              .clipped()
-                                      default:
-                                          LinearGradient(
-                                              colors: [store.theme.accent.opacity(0.35), Color.black],
-                                              startPoint: .top,
-                                              endPoint: .bottom
-                                          )
+                                  if let img = artistPortrait {
+                                      Image(uiImage: img)
+                                          .resizable()
+                                          .scaledToFill()
                                           .frame(width: UIScreen.main.bounds.width, height: 290)
+                                          .clipped()
+                                  } else {
+                                      AsyncImage(url: URL(string: albums.first?.artworkURL ?? topSongs.first?.artworkURL ?? artistSummary.artworkURL ?? "")) { phase in
+                                          switch phase {
+                                          case .success(let img):
+                                              img.resizable().scaledToFill()
+                                                  .frame(width: UIScreen.main.bounds.width, height: 290)
+                                                  .clipped()
+                                          default:
+                                              Color(white: 0.08)
+                                                  .frame(width: UIScreen.main.bounds.width, height: 290)
+                                          }
                                       }
+                                      .frame(width: UIScreen.main.bounds.width, height: 290)
                                   }
-                                  .frame(width: UIScreen.main.bounds.width, height: 290)
 
                                   LinearGradient(
-                                      colors: [.clear, Color.black.opacity(0.75), Color(red: 0.03, green: 0.04, blue: 0.06)],
+                                      colors: [.clear, Color.black.opacity(0.75), Color.black],
                                       startPoint: .top,
                                       endPoint: .bottom
                                   )
@@ -3166,7 +3397,7 @@ jobs:
                                   VStack(alignment: .leading, spacing: 10) {
                                       Text("OFFICIAL ARTIST PROFILE")
                                           .font(.system(size: 10, weight: .black, design: .monospaced))
-                                          .foregroundStyle(store.theme.accent)
+                                          .foregroundStyle(.white.opacity(0.7))
 
                                       Text(artistSummary.name)
                                           .font(.system(size: 34, weight: .black, design: .rounded))
@@ -3208,10 +3439,10 @@ jobs:
                                               }
                                               .padding(.horizontal, 16)
                                               .padding(.vertical, 11)
-                                              .background(store.theme.accent.opacity(0.22))
-                                              .foregroundStyle(store.theme.accent)
+                                              .background(Color.white.opacity(0.14))
+                                              .foregroundStyle(.white)
                                               .clipShape(Capsule())
-                                              .overlay(Capsule().stroke(store.theme.accent.opacity(0.5), lineWidth: 1))
+                                              .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
                                       }
@@ -3225,7 +3456,7 @@ jobs:
                                   HStack {
                                       Spacer()
                                       VStack(spacing: 10) {
-                                          ProgressView().tint(store.theme.accent)
+                                          ProgressView().tint(.white)
                                           Text("جاري جلب أحدث أغاني وألبومات \(artistSummary.name)...")
                                               .font(.caption.weight(.semibold))
                                               .foregroundStyle(.white.opacity(0.6))
@@ -3234,7 +3465,6 @@ jobs:
                                       Spacer()
                                   }
                               } else {
-                                  // Albums & EPs Rail
                                   if !albums.isEmpty {
                                       VStack(alignment: .leading, spacing: 12) {
                                           HStack {
@@ -3259,7 +3489,7 @@ jobs:
                                                                       img.resizable().scaledToFill()
                                                                           .frame(width: 144, height: 144).clipped()
                                                                   default:
-                                                                      Color(red: 0.12, green: 0.14, blue: 0.20)
+                                                                      Color(white: 0.08)
                                                                           .frame(width: 144, height: 144)
                                                                   }
                                                               }
@@ -3278,7 +3508,7 @@ jobs:
 
                                                               Text("\(alb.releaseYear) • \(alb.trackCount) أغاني")
                                                                   .font(.system(size: 11, weight: .medium))
-                                                                  .foregroundStyle(store.theme.accent)
+                                                                  .foregroundStyle(.white.opacity(0.6))
                                                                   .lineLimit(1)
                                                                   .frame(width: 144, alignment: .leading)
                                                           }
@@ -3292,7 +3522,6 @@ jobs:
                                       }
                                   }
 
-                                  // Latest & Top Songs
                                   VStack(alignment: .leading, spacing: 12) {
                                       HStack {
                                           Text("أحدث وأشهر الأغاني · Top Songs (\(topSongs.count))")
@@ -3333,18 +3562,21 @@ jobs:
                   }
                   .task {
                       isLoadingProfile = true
-                      let profile = await JioSaavnStreamCrypto.fetchArtistProfile(
+                      async let portraitTask = HarborArtworkService.shared.resolveArtistImage(artistName: artistSummary.name, initialURL: artistSummary.artworkURL)
+                      async let profileTask = JioSaavnStreamCrypto.fetchArtistProfile(
                           artistName: artistSummary.name,
                           fallbackArtwork: artistSummary.artworkURL
                       )
-                      topSongs = profile.topSongs
-                      albums = profile.albums
-                      isLoadingProfile = false
+                      let (portraitImg, profile) = await (portraitTask, profileTask)
+                      self.artistPortrait = portraitImg
+                      self.topSongs = profile.topSongs
+                      self.albums = profile.albums
+                      self.isLoadingProfile = false
                   }
               }
           }
 
-          // MARK: - Dedicated Album Detail View (Full Album Tracklist)
+          // MARK: - Dedicated Album Detail View (Noir Black-on-Black)
 
           struct HarborAlbumDetailView: View {
               @EnvironmentObject var store: HarborStore
@@ -3356,7 +3588,7 @@ jobs:
 
               var body: some View {
                   ZStack(alignment: .top) {
-                      Color(red: 0.03, green: 0.04, blue: 0.06).ignoresSafeArea()
+                      Color.black.ignoresSafeArea()
 
                       ScrollView(.vertical, showsIndicators: false) {
                           VStack(spacing: 20) {
@@ -3367,13 +3599,13 @@ jobs:
                                           img.resizable().scaledToFill()
                                               .frame(width: 210, height: 210).clipped()
                                       default:
-                                          Color(red: 0.12, green: 0.14, blue: 0.20)
+                                          Color(white: 0.08)
                                               .frame(width: 210, height: 210)
                                       }
                                   }
                                   .frame(width: 210, height: 210)
                                   .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                                  .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
+                                  .shadow(color: .black.opacity(0.65), radius: 18, y: 8)
 
                                   VStack(spacing: 4) {
                                       Text(album.title)
@@ -3382,7 +3614,7 @@ jobs:
                                           .multilineTextAlignment(.center)
                                       Text("\(album.artist) • \(album.releaseYear)")
                                           .font(.subheadline.weight(.bold))
-                                          .foregroundStyle(store.theme.accent)
+                                          .foregroundStyle(.white.opacity(0.68))
                                   }
                                   .padding(.horizontal, 20)
 
@@ -3415,8 +3647,8 @@ jobs:
                                               .font(.subheadline.weight(.bold))
                                               .padding(.horizontal, 16)
                                               .padding(.vertical, 11)
-                                              .background(store.theme.accent.opacity(0.2))
-                                              .foregroundStyle(store.theme.accent)
+                                              .background(Color.white.opacity(0.12))
+                                              .foregroundStyle(.white)
                                               .clipShape(Capsule())
                                       }
                                       .buttonStyle(SmoothPressButtonStyle())
@@ -3425,7 +3657,7 @@ jobs:
                               .padding(.top, 16)
 
                               if isLoadingTracks {
-                                  ProgressView().tint(store.theme.accent).padding(.top, 30)
+                                  ProgressView().tint(.white).padding(.top, 30)
                               } else {
                                   VStack(spacing: 9) {
                                       ForEach(tracks) { track in
@@ -3484,9 +3716,9 @@ jobs:
                                           .clipped()
                                   default:
                                       ZStack {
-                                          Color(red: 0.14, green: 0.15, blue: 0.20)
+                                          Color(white: 0.10)
                                           Image(systemName: "music.note")
-                                              .foregroundStyle(store.theme.accent)
+                                              .foregroundStyle(.white.opacity(0.7))
                                       }
                                       .frame(width: 52, height: 52)
                                   }
@@ -3495,7 +3727,7 @@ jobs:
                               .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                               .overlay(
                                   RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                      .stroke(isCurrent ? store.theme.accent : Color.white.opacity(0.10), lineWidth: isCurrent ? 1.5 : 0.6)
+                                      .stroke(isCurrent ? Color.white : Color.white.opacity(0.10), lineWidth: isCurrent ? 1.5 : 0.6)
                               )
                           }
                           .frame(width: 56, height: 56)
@@ -3506,22 +3738,21 @@ jobs:
                           Button(action: onTapTrack) {
                               Text(track.title)
                                   .font(.system(size: 14.5, weight: .bold))
-                                  .foregroundStyle(isCurrent ? store.theme.accent : .white)
+                                  .foregroundStyle(.white)
                                   .lineLimit(1)
                           }
                           .buttonStyle(.plain)
 
-                          // Tapping the Artist's name opens the Artist Profile Page (Latest Songs + Albums)!
                           HStack(spacing: 5) {
                               Button(action: onTapArtist) {
                                   HStack(spacing: 3) {
                                       Text(track.artist)
                                           .font(.system(size: 12, weight: .semibold))
-                                          .foregroundStyle(store.theme.accent.opacity(0.92))
+                                          .foregroundStyle(.white.opacity(0.72))
                                           .lineLimit(1)
                                       Image(systemName: "chevron.right")
                                           .font(.system(size: 9, weight: .bold))
-                                          .foregroundStyle(store.theme.accent.opacity(0.75))
+                                          .foregroundStyle(.white.opacity(0.5))
                                   }
                               }
                               .buttonStyle(.plain)
@@ -3531,7 +3762,7 @@ jobs:
                                   : String(format: "%d:%02d", Int(max(track.durationSeconds, 180)) / 60, Int(max(track.durationSeconds, 180)) % 60)
                               Text("· \(durText)")
                                   .font(.system(size: 11.5, weight: .medium))
-                                  .foregroundStyle(.white.opacity(0.5))
+                                  .foregroundStyle(.white.opacity(0.45))
                           }
                       }
 
@@ -3545,9 +3776,9 @@ jobs:
                       } label: {
                           Image(systemName: "text.quote")
                               .font(.system(size: 13.5, weight: .bold))
-                              .foregroundStyle(isCurrent ? store.theme.accent : .white.opacity(0.65))
+                              .foregroundStyle(.white.opacity(0.75))
                               .frame(width: 34, height: 34)
-                              .background(Color.white.opacity(0.07))
+                              .background(Color(white: 0.11))
                               .clipShape(Circle())
                       }
                       .buttonStyle(.plain)
@@ -3556,15 +3787,15 @@ jobs:
                           if isCurrent {
                               Image(systemName: isPlaying ? "waveform" : "pause.circle.fill")
                                   .font(.title3.weight(.bold))
-                                  .foregroundStyle(store.theme.accent)
+                                  .foregroundStyle(.white)
                                   .symbolEffect(.variableColor.iterative, isActive: isPlaying)
                                   .frame(width: 34, height: 34)
                           } else {
                               Image(systemName: "play.fill")
                                   .font(.caption.weight(.bold))
-                                  .foregroundStyle(.white.opacity(0.8))
+                                  .foregroundStyle(.white.opacity(0.85))
                                   .frame(width: 34, height: 34)
-                                  .background(Color.white.opacity(0.08))
+                                  .background(Color(white: 0.11))
                                   .clipShape(Circle())
                           }
                       }
@@ -3575,16 +3806,18 @@ jobs:
                   .frame(height: 72)
                   .background(
                       RoundedRectangle(cornerRadius: 16, style: .continuous)
-                          .fill(isCurrent ? store.theme.accent.opacity(0.12) : Color(red: 0.08, green: 0.10, blue: 0.14).opacity(0.92))
+                          .fill(isCurrent ? Color(white: 0.13) : Color(white: 0.06))
                   )
                   .overlay(
                       RoundedRectangle(cornerRadius: 16, style: .continuous)
-                          .stroke(isCurrent ? store.theme.accent.opacity(0.55) : Color.white.opacity(0.06), lineWidth: isCurrent ? 1.2 : 0.6)
+                          .stroke(isCurrent ? Color.white.opacity(0.45) : Color.white.opacity(0.07), lineWidth: isCurrent ? 1.1 : 0.6)
                   )
                   .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                   .environment(\.layoutDirection, .leftToRight)
               }
           }
+
+          // MARK: - Redesigned Bottom Mini-Player Bar (Play/Pause + Next + Replay Song + Tiny 22x22 Slowed Icon Button)
 
           struct HarborMiniAudioPlayerBar: View {
               @EnvironmentObject var store: HarborStore
@@ -3592,51 +3825,64 @@ jobs:
 
               var body: some View {
                   if let track = audioManager.currentTrack {
-                      HStack(spacing: 10) {
+                      HStack(spacing: 8) {
+                          // 1. Play / Pause
                           Button {
                               audioManager.togglePlayPause()
                           } label: {
                               if audioManager.isResolvingFullStream {
-                                  ProgressView().tint(.white).frame(width: 36, height: 36)
+                                  ProgressView().tint(.white).frame(width: 32, height: 32)
                               } else {
                                   Image(systemName: audioManager.isPlaying ? "pause.fill" : "play.fill")
-                                      .font(.system(size: 18, weight: .bold))
+                                      .font(.system(size: 17, weight: .bold))
                                       .foregroundStyle(.white)
-                                      .frame(width: 36, height: 36)
+                                      .frame(width: 32, height: 32)
                               }
                           }
                           .buttonStyle(SmoothPressButtonStyle())
 
+                          // 2. Next Track
                           Button {
                               audioManager.playNext()
                           } label: {
                               Image(systemName: "forward.fill")
-                                  .font(.system(size: 15, weight: .semibold))
-                                  .foregroundStyle(.white.opacity(0.75))
+                                  .font(.system(size: 14, weight: .semibold))
+                                  .foregroundStyle(.white.opacity(0.82))
+                                  .frame(width: 28, height: 28)
                           }
                           .buttonStyle(SmoothPressButtonStyle())
 
-                          // Instant 1-Tap Slowed + Reverb Toggle right on the Mini-Player!
+                          // 3. Replay Song Button (زر إعادة الأغنية من البداية)
+                          Button {
+                              audioManager.replayCurrentTrack()
+                          } label: {
+                              Image(systemName: "arrow.counterclockwise")
+                                  .font(.system(size: 13, weight: .bold))
+                                  .foregroundStyle(.white.opacity(0.88))
+                                  .frame(width: 28, height: 28)
+                                  .background(Color.white.opacity(0.08))
+                                  .clipShape(Circle())
+                          }
+                          .buttonStyle(SmoothPressButtonStyle())
+
+                          // 4. Tiny Slowed+Reverb Icon Button (زر صغير للغاية للتبطيء بدون نص)
                           Button {
                               let nextPreset: HarborAudioDSPPreset = (audioManager.dspPreset == .slowedReverb) ? .normal : .slowedReverb
                               audioManager.selectDSPPreset(nextPreset)
                           } label: {
-                              HStack(spacing: 4) {
-                                  Image(systemName: "water.waves")
-                                      .font(.system(size: 10.5, weight: .bold))
-                                  Text(audioManager.dspPreset == .normal ? "بطيء+صدى" : audioManager.dspPreset.shortBadge)
-                                      .font(.system(size: 10.5, weight: .bold))
-                              }
-                              .padding(.horizontal, 9)
-                              .padding(.vertical, 5)
-                              .background(audioManager.dspPreset == .normal ? Color.white.opacity(0.10) : store.theme.accent)
-                              .foregroundStyle(audioManager.dspPreset == .normal ? Color.white : Color.black)
-                              .clipShape(Capsule())
+                              Image(systemName: "water.waves")
+                                  .font(.system(size: 9.5, weight: .bold))
+                                  .frame(width: 22, height: 22)
+                                  .background(audioManager.dspPreset == .normal ? Color.white.opacity(0.09) : Color.white)
+                                  .foregroundStyle(audioManager.dspPreset == .normal ? Color.white.opacity(0.75) : Color.black)
+                                  .clipShape(Circle())
+                                  .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.6))
                           }
                           .buttonStyle(SmoothPressButtonStyle())
 
-                          Spacer()
+                          Spacer(minLength: 6)
 
+                          // 5. Track Title, Artist & Artwork (Tapping opens Full-Screen Player)
                           Button {
                               audioManager.isShowingFullPlayer = true
                           } label: {
@@ -3648,7 +3894,7 @@ jobs:
                                           .lineLimit(1)
                                       Text(track.artist)
                                           .font(.caption2)
-                                          .foregroundStyle(.white.opacity(0.68))
+                                          .foregroundStyle(.white.opacity(0.65))
                                           .lineLimit(1)
                                   }
 
@@ -3661,7 +3907,7 @@ jobs:
                                               .clipped()
                                       default:
                                           ZStack {
-                                              Color(red: 0.20, green: 0.20, blue: 0.25)
+                                              Color(white: 0.12)
                                               Image(systemName: "music.note")
                                                   .foregroundStyle(.white.opacity(0.7))
                                           }
@@ -3672,7 +3918,7 @@ jobs:
                                   .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                   .overlay(
                                       RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                          .stroke(store.theme.accent.opacity(audioManager.isPlaying ? 0.8 : 0.2), lineWidth: 1.2)
+                                          .stroke(Color.white.opacity(audioManager.isPlaying ? 0.45 : 0.14), lineWidth: 1.0)
                                   )
                               }
                           }
@@ -3682,28 +3928,21 @@ jobs:
                       .frame(height: 56)
                       .background(
                           Capsule(style: .continuous)
-                              .fill(Color(red: 0.08, green: 0.10, blue: 0.15).opacity(0.96))
+                              .fill(Color(white: 0.055).opacity(0.97))
                       )
                       .overlay(
                           Capsule(style: .continuous)
-                              .stroke(
-                                  LinearGradient(
-                                      colors: [store.theme.accent.opacity(audioManager.isPlaying ? 0.55 : 0.20), Color.white.opacity(0.12)],
-                                      startPoint: .trailing,
-                                      endPoint: .leading
-                                  ),
-                                  lineWidth: 1.0
-                              )
+                              .stroke(Color.white.opacity(0.13), lineWidth: 0.9)
                       )
                       .clipShape(Capsule(style: .continuous))
-                      .shadow(color: .black.opacity(0.55), radius: 12, y: 4)
+                      .shadow(color: .black.opacity(0.75), radius: 14, y: 5)
                       .padding(.horizontal, 18)
                       .environment(\.layoutDirection, .leftToRight)
                   }
               }
           }
 
-          // MARK: - BitChord × Harbor Studio Full Player (With Real-Time Slowed + Reverb DSP Studio & Tappable Artist Profile!)
+          // MARK: - Edge-to-Edge Full-Screen Player Matching Image 3 (No Top Gap + Dominant Artwork Color Background + Bottom-Anchored Controls)
 
           struct HarborFullMusicPlayerSheet: View {
               @EnvironmentObject var store: HarborStore
@@ -3714,55 +3953,88 @@ jobs:
               @State private var showDedicatedLyricsSheet: Bool = false
               @State private var selectedArtistFromPlayer: HarborArtistSummary? = nil
 
+              // Dominant Color Background State extracted from the current track's cover art
+              @State private var bgTopColor: Color = Color(red: 0.22, green: 0.06, blue: 0.07)
+              @State private var bgMidColor: Color = Color(red: 0.10, green: 0.03, blue: 0.03)
+              @State private var bgBotColor: Color = Color(red: 0.03, green: 0.01, blue: 0.01)
+              @State private var loadedCoverImage: UIImage? = nil
+
               var body: some View {
                   NavigationStack {
-                      ZStack {
-                          LinearGradient(
-                              colors: [
-                                  Color(red: 0.06, green: 0.09, blue: 0.16),
-                                  Color(red: 0.03, green: 0.04, blue: 0.08),
-                                  Color(red: 0.01, green: 0.02, blue: 0.04)
-                              ],
-                              startPoint: .topLeading,
-                              endPoint: .bottomTrailing
-                          )
-                          .ignoresSafeArea()
+                      GeometryReader { geo in
+                          ZStack {
+                              // 1. Edge-to-Edge Dominant Artwork Color Background (Matching image_3.png)
+                              LinearGradient(
+                                  colors: [bgTopColor, bgMidColor, bgBotColor],
+                                  startPoint: .top,
+                                  endPoint: .bottom
+                              )
+                              .ignoresSafeArea()
+                              .animation(.easeInOut(duration: 0.45), value: audioManager.currentTrack?.id)
 
-                          if let track = audioManager.currentTrack {
-                              ScrollView(.vertical, showsIndicators: false) {
-                                  VStack(spacing: 16) {
-                                      // 1. Top Studio Header
-                                      HStack {
+                              if let track = audioManager.currentTrack {
+                                  let artSize = min(geo.size.width - 48, geo.size.height * 0.41)
+
+                                  VStack(spacing: 0) {
+                                      // 2. Top Header Bar (Edge-to-Edge, No Top Gap — Matching image_3.png)
+                                      HStack(spacing: 14) {
                                           Button {
-                                              withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                                              withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                                   showCustomDSPSliders.toggle()
                                               }
                                           } label: {
-                                              HStack(spacing: 5) {
-                                                  Image(systemName: "slider.horizontal.3")
-                                                      .font(.system(size: 13, weight: .bold))
-                                                  Text("استوديو الصدى والسرعة")
-                                                      .font(.system(size: 11.5, weight: .bold))
-                                              }
-                                              .padding(.horizontal, 12)
-                                              .padding(.vertical, 7)
-                                              .background(showCustomDSPSliders ? store.theme.accent : Color.white.opacity(0.09))
-                                              .foregroundStyle(showCustomDSPSliders ? Color.black : Color.white)
-                                              .clipShape(Capsule())
+                                              Image(systemName: "ellipsis")
+                                                  .font(.system(size: 18, weight: .bold))
+                                                  .rotationEffect(.degrees(90))
+                                                  .foregroundStyle(.white.opacity(0.9))
+                                                  .frame(width: 36, height: 36)
+                                          }
+                                          .buttonStyle(SmoothPressButtonStyle())
+
+                                          Button {
+                                              audioManager.replayCurrentTrack()
+                                          } label: {
+                                              Image(systemName: "arrow.counterclockwise")
+                                                  .font(.system(size: 16, weight: .bold))
+                                                  .foregroundStyle(.white.opacity(0.85))
+                                                  .frame(width: 36, height: 36)
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
 
                                           Spacer()
 
-                                          VStack(spacing: 2) {
-                                              Capsule()
-                                                  .fill(Color.white.opacity(0.28))
-                                                  .frame(width: 36, height: 4)
-                                                  .padding(.bottom, 2)
-                                              Text("\(audioManager.activeEngineLabel) • \(String(format: "%.2fx", audioManager.playbackSpeed))")
-                                                  .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                                  .foregroundStyle(store.theme.accent)
+                                          // Center Artwork / Lyrics Segmented Pill (Just like image_3.png!)
+                                          HStack(spacing: 0) {
+                                              Button {
+                                                  withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                      showInlineLyrics = true
+                                                  }
+                                              } label: {
+                                                  Image(systemName: "text.quote")
+                                                      .font(.system(size: 13, weight: .bold))
+                                                      .foregroundStyle(.white)
+                                                      .frame(width: 44, height: 32)
+                                                      .background(showInlineLyrics ? Color.white.opacity(0.22) : Color.clear)
+                                                      .clipShape(Capsule())
+                                              }
+
+                                              Button {
+                                                  withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                      showInlineLyrics = false
+                                                  }
+                                              } label: {
+                                                  Image(systemName: "headphones")
+                                                      .font(.system(size: 13, weight: .bold))
+                                                      .foregroundStyle(.white)
+                                                      .frame(width: 44, height: 32)
+                                                      .background(!showInlineLyrics ? Color.white.opacity(0.22) : Color.clear)
+                                                      .clipShape(Capsule())
+                                              }
                                           }
+                                          .padding(3)
+                                          .background(Color.black.opacity(0.28))
+                                          .clipShape(Capsule())
+                                          .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.7))
 
                                           Spacer()
 
@@ -3770,57 +4042,54 @@ jobs:
                                               dismiss()
                                           } label: {
                                               Image(systemName: "chevron.down")
-                                                  .font(.system(size: 16, weight: .bold))
-                                                  .foregroundStyle(.white)
+                                                  .font(.system(size: 18, weight: .semibold))
+                                                  .foregroundStyle(.white.opacity(0.92))
                                                   .frame(width: 36, height: 36)
-                                                  .background(Color.white.opacity(0.08))
-                                                  .clipShape(Circle())
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
                                       }
-                                      .padding(.horizontal, 22)
-                                      .padding(.top, 10)
+                                      .padding(.horizontal, 20)
+                                      .padding(.top, 8)
                                       .environment(\.layoutDirection, .leftToRight)
 
-                                      // 2. Center Stage: Glowing Artwork OR Synced Lyrics Canvas
+                                      Spacer(minLength: 14)
+
+                                      // 3. Large Square Album Cover Art OR Inline Synced Lyrics Canvas
                                       if showInlineLyrics {
                                           HarborInlineLyricsCanvas()
-                                              .frame(height: 270)
-                                              .padding(.horizontal, 20)
+                                              .frame(width: artSize, height: artSize)
                                       } else {
-                                          ContainedArtworkGlow(
-                                              artworkURL: track.artworkURL,
-                                              isActive: audioManager.isPlaying,
-                                              frameSize: 256,
-                                              glowBlur: 26
-                                          ) {
-                                              AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
-                                                  switch phase {
-                                                  case .success(let image):
-                                                      image
-                                                          .resizable()
-                                                          .scaledToFill()
-                                                          .frame(width: 256, height: 256)
-                                                          .clipped()
-                                                  default:
-                                                      ZStack {
-                                                          Color(red: 0.10, green: 0.14, blue: 0.22)
-                                                          Image(systemName: "waveform.circle.fill")
-                                                              .font(.system(size: 72))
-                                                              .foregroundStyle(store.theme.accent)
+                                          ZStack {
+                                              if let uiImg = loadedCoverImage {
+                                                  Image(uiImage: uiImg)
+                                                      .resizable()
+                                                      .scaledToFill()
+                                                      .frame(width: artSize, height: artSize)
+                                                      .clipped()
+                                              } else {
+                                                  AsyncImage(url: URL(string: track.artworkURL ?? "")) { phase in
+                                                      switch phase {
+                                                      case .success(let image):
+                                                          image
+                                                              .resizable()
+                                                              .scaledToFill()
+                                                              .frame(width: artSize, height: artSize)
+                                                              .clipped()
+                                                      default:
+                                                          ZStack {
+                                                              Color.black.opacity(0.35)
+                                                              Image(systemName: "music.note")
+                                                                  .font(.system(size: 64))
+                                                                  .foregroundStyle(.white.opacity(0.4))
+                                                          }
+                                                          .frame(width: artSize, height: artSize)
                                                       }
-                                                      .frame(width: 256, height: 256)
                                                   }
                                               }
-                                              .frame(width: 256, height: 256)
-                                              .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                                              .overlay(
-                                                  RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                                      .stroke(Color.white.opacity(0.20), lineWidth: 1.0)
-                                              )
-                                              .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
                                           }
-                                          .frame(width: 276, height: 270)
+                                          .frame(width: artSize, height: artSize)
+                                          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                          .shadow(color: .black.opacity(0.55), radius: 24, y: 10)
                                           .onTapGesture {
                                               withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
                                                   showInlineLyrics = true
@@ -3828,45 +4097,59 @@ jobs:
                                           }
                                       }
 
-                                      // 3. Track Title & Interactive Tappable Artist Name (Opens Artist Profile & Albums!)
-                                      VStack(spacing: 6) {
-                                          Text(track.title)
-                                              .font(.system(size: 22, weight: .heavy, design: .rounded))
-                                              .foregroundStyle(.white)
-                                              .multilineTextAlignment(.center)
-                                              .lineLimit(1)
+                                      Spacer(minLength: 20)
+
+                                      // 4. Right-Aligned Track Title & Tappable Artist Row (Matching image_3.png: `< Sanctuary` + `Joji`)
+                                      VStack(alignment: .trailing, spacing: 5) {
+                                          Button {
+                                              openArtistProfile(for: track)
+                                          } label: {
+                                              HStack(spacing: 8) {
+                                                  Image(systemName: "chevron.left")
+                                                      .font(.system(size: 16, weight: .bold))
+                                                      .foregroundStyle(.white.opacity(0.65))
+                                                  Text(track.title)
+                                                      .font(.system(size: 26, weight: .heavy, design: .rounded))
+                                                      .foregroundStyle(.white)
+                                                      .lineLimit(1)
+                                              }
+                                          }
+                                          .buttonStyle(.plain)
 
                                           Button {
-                                              let primary = track.artist.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? track.artist
-                                              selectedArtistFromPlayer = HarborArtistSummary(
-                                                  id: "art-\(primary.lowercased())",
-                                                  name: primary,
-                                                  artworkURL: track.artworkURL,
-                                                  genre: track.genre ?? "Studio Artist"
-                                              )
+                                              openArtistProfile(for: track)
                                           } label: {
-                                              HStack(spacing: 6) {
-                                                  Image(systemName: "person.crop.circle.fill")
-                                                      .font(.system(size: 13))
-                                                  Text(track.artist)
-                                                      .font(.system(size: 15, weight: .bold))
-                                                  Text("• عرض الأغاني والألبومات ›")
-                                                      .font(.system(size: 11.5, weight: .semibold))
-                                                      .foregroundStyle(.white.opacity(0.7))
-                                              }
-                                              .padding(.horizontal, 14)
-                                              .padding(.vertical, 6)
-                                              .background(store.theme.accent.opacity(0.15))
-                                              .foregroundStyle(store.theme.accent)
-                                              .clipShape(Capsule())
+                                              Text(track.artist)
+                                                  .font(.system(size: 16.5, weight: .semibold))
+                                                  .foregroundStyle(.white.opacity(0.75))
+                                                  .lineLimit(1)
                                           }
-                                          .buttonStyle(SmoothPressButtonStyle())
+                                          .buttonStyle(.plain)
                                       }
-                                      .padding(.horizontal, 20)
+                                      .frame(maxWidth: .infinity, alignment: .trailing)
+                                      .padding(.horizontal, 24)
+                                      .environment(\.layoutDirection, .leftToRight)
 
-                                      // 4. Real-Time Audio DSP Preset Bar (طبيعي • بطيء • بطيء بصدى 🌊 • بطيء عميق 🌌 • مسرّع ⚡ • صدى القاعة)
+                                      // 5. Compact Studio Pills Strip (Lyrics + Slowed/Reverb Presets — Matching Pill Strip in image_3.png, Zero Likes/Comments)
                                       ScrollView(.horizontal, showsIndicators: false) {
-                                          HStack(spacing: 9) {
+                                          HStack(spacing: 10) {
+                                              Button {
+                                                  showDedicatedLyricsSheet = true
+                                              } label: {
+                                                  HStack(spacing: 6) {
+                                                      Text("كلمات الأغنية")
+                                                          .font(.system(size: 13, weight: .bold))
+                                                      Image(systemName: "quote.bubble.fill")
+                                                          .font(.system(size: 12.5, weight: .bold))
+                                                  }
+                                                  .padding(.horizontal, 16)
+                                                  .padding(.vertical, 9)
+                                                  .background(Color.white.opacity(0.14))
+                                                  .foregroundStyle(.white)
+                                                  .clipShape(Capsule())
+                                              }
+                                              .buttonStyle(SmoothPressButtonStyle())
+
                                               ForEach(HarborAudioDSPPreset.allCases) { preset in
                                                   let isSelected = (audioManager.dspPreset == preset)
                                                   Button {
@@ -3880,136 +4163,40 @@ jobs:
                                                           Text(preset.shortBadge)
                                                               .font(.system(size: 12.5, weight: .bold))
                                                       }
-                                                      .padding(.horizontal, 14)
+                                                      .padding(.horizontal, 15)
                                                       .padding(.vertical, 9)
-                                                      .background(isSelected ? store.theme.accent : Color.white.opacity(0.08))
+                                                      .background(isSelected ? Color.white : Color.white.opacity(0.12))
                                                       .foregroundStyle(isSelected ? Color.black : Color.white)
                                                       .clipShape(Capsule())
-                                                      .overlay(
-                                                          Capsule().stroke(Color.white.opacity(isSelected ? 0 : 0.14), lineWidth: 0.8)
-                                                      )
                                                   }
                                                   .buttonStyle(SmoothPressButtonStyle())
                                               }
-                                          }
-                                          .padding(.horizontal, 20)
-                                      }
-                                      .environment(\.layoutDirection, .leftToRight)
 
-                                      // 5. Optional Expandable Fine-Tuning Sliders for Speed & Reverb Mix
-                                      if showCustomDSPSliders {
-                                          VStack(spacing: 12) {
-                                              HStack {
-                                                  Text(String(format: "%.2fx", audioManager.playbackSpeed))
-                                                      .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                                      .foregroundStyle(store.theme.accent)
-                                                  Slider(
-                                                      value: Binding(
-                                                          get: { audioManager.playbackSpeed },
-                                                          set: { newSpeed in
-                                                              audioManager.updateCustomDSP(
-                                                                  speed: newSpeed,
-                                                                  reverb: audioManager.reverbMix,
-                                                                  varispeed: audioManager.useAnalogVarispeedPitch
-                                                              )
-                                                          }
-                                                      ),
-                                                      in: 0.65...1.35,
-                                                      step: 0.01
-                                                  )
-                                                  .tint(store.theme.accent)
-                                                  Text("سرعة الصوت")
-                                                      .font(.caption.weight(.bold))
-                                                      .foregroundStyle(.white.opacity(0.85))
-                                              }
-
-                                              HStack {
-                                                  Text("\(Int(audioManager.reverbMix * 100))%")
-                                                      .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                                      .foregroundStyle(store.theme.accent)
-                                                  Slider(
-                                                      value: Binding(
-                                                          get: { audioManager.reverbMix },
-                                                          set: { newRev in
-                                                              audioManager.updateCustomDSP(
-                                                                  speed: audioManager.playbackSpeed,
-                                                                  reverb: newRev,
-                                                                  varispeed: audioManager.useAnalogVarispeedPitch
-                                                              )
-                                                          }
-                                                      ),
-                                                      in: 0.0...1.0,
-                                                      step: 0.02
-                                                  )
-                                                  .tint(store.theme.accent)
-                                                  Text("عمق الصدى (Reverb)")
-                                                      .font(.caption.weight(.bold))
-                                                      .foregroundStyle(.white.opacity(0.85))
-                                              }
-
-                                              Toggle(isOn: Binding(
-                                                  get: { audioManager.useAnalogVarispeedPitch },
-                                                  set: { newVal in
-                                                      audioManager.updateCustomDSP(
-                                                          speed: audioManager.playbackSpeed,
-                                                          reverb: audioManager.reverbMix,
-                                                          varispeed: newVal
-                                                      )
+                                              Button {
+                                                  withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                      showCustomDSPSliders.toggle()
                                                   }
-                                              )) {
-                                                  Text("تغيير طبقة الصوت مع السرعة (Analog Tape Pitch)")
-                                                      .font(.caption.weight(.semibold))
-                                                      .foregroundStyle(.white.opacity(0.8))
+                                              } label: {
+                                                  HStack(spacing: 6) {
+                                                      Image(systemName: "slider.horizontal.3")
+                                                          .font(.system(size: 12, weight: .bold))
+                                                      Text("ضبط الصدى والسرعة")
+                                                          .font(.system(size: 12.5, weight: .bold))
+                                                  }
+                                                  .padding(.horizontal, 15)
+                                                  .padding(.vertical, 9)
+                                                  .background(showCustomDSPSliders ? Color.white : Color.white.opacity(0.12))
+                                                  .foregroundStyle(showCustomDSPSliders ? Color.black : Color.white)
+                                                  .clipShape(Capsule())
                                               }
-                                              .tint(store.theme.accent)
+                                              .buttonStyle(SmoothPressButtonStyle())
                                           }
-                                          .padding(14)
-                                          .background(Color.white.opacity(0.06))
-                                          .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                          .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 0.8))
-                                          .padding(.horizontal, 20)
-                                          .environment(\.layoutDirection, .leftToRight)
+                                          .padding(.horizontal, 24)
                                       }
-
-                                      // 6. Lyrics & Studio Controls Row
-                                      HStack(spacing: 12) {
-                                          Button {
-                                              withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                                                  showInlineLyrics.toggle()
-                                              }
-                                          } label: {
-                                              HStack(spacing: 6) {
-                                                  Image(systemName: "text.quote")
-                                                  Text(showInlineLyrics ? "عرض الغلاف" : "الكلمات المتزامنة")
-                                              }
-                                              .font(.system(size: 12.5, weight: .bold))
-                                              .padding(.horizontal, 15)
-                                              .padding(.vertical, 9)
-                                              .background(showInlineLyrics ? store.theme.accent : Color.white.opacity(0.08))
-                                              .foregroundStyle(showInlineLyrics ? Color.black : Color.white)
-                                              .clipShape(Capsule())
-                                          }
-                                          .buttonStyle(SmoothPressButtonStyle())
-
-                                          Button {
-                                              showDedicatedLyricsSheet = true
-                                          } label: {
-                                              HStack(spacing: 6) {
-                                                  Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                                  Text("شاشة الكلمات الكاملة")
-                                              }
-                                              .font(.system(size: 12.5, weight: .bold))
-                                              .padding(.horizontal, 15)
-                                              .padding(.vertical, 9)
-                                              .background(Color.white.opacity(0.08))
-                                              .foregroundStyle(.white)
-                                              .clipShape(Capsule())
-                                          }
-                                          .buttonStyle(SmoothPressButtonStyle())
-                                      }
+                                      .padding(.top, 16)
                                       .environment(\.layoutDirection, .leftToRight)
 
-                                      // 7. Scrubber
+                                      // 6. Progress Bar & Timestamps (Matching image_3.png)
                                       VStack(spacing: 6) {
                                           Slider(
                                               value: Binding(
@@ -4018,33 +4205,31 @@ jobs:
                                               ),
                                               in: 0...max(audioManager.duration, 1)
                                           )
-                                          .tint(store.theme.accent)
+                                          .tint(.white)
 
                                           HStack {
                                               Text(formatTime(audioManager.currentTime))
                                                   .contentTransition(.numericText())
                                               Spacer()
-                                              Text(audioManager.lyricsSourceBadge)
-                                                  .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                                  .foregroundStyle(.white.opacity(0.42))
-                                              Spacer()
                                               Text(formatTime(audioManager.duration))
                                                   .contentTransition(.numericText())
                                           }
-                                          .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                          .foregroundStyle(.white.opacity(0.65))
+                                          .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                                          .foregroundStyle(.white.opacity(0.75))
                                       }
-                                      .padding(.horizontal, 26)
+                                      .padding(.horizontal, 24)
+                                      .padding(.top, 16)
                                       .environment(\.layoutDirection, .leftToRight)
 
-                                      // 8. Transport Controls
-                                      HStack(spacing: 34) {
+                                      // 7. Bottom-Anchored Transport Controls (Matching image_3.png: Shuffle, Prev, Large White Circle Play/Pause, Next, Repeat)
+                                      HStack(spacing: 0) {
                                           Button {
                                               audioManager.isShuffleEnabled.toggle()
                                           } label: {
                                               Image(systemName: "shuffle")
-                                                  .font(.system(size: 19, weight: .semibold))
-                                                  .foregroundStyle(audioManager.isShuffleEnabled ? store.theme.accent : .white.opacity(0.65))
+                                                  .font(.system(size: 21, weight: .semibold))
+                                                  .foregroundStyle(audioManager.isShuffleEnabled ? Color.white : .white.opacity(0.65))
+                                                  .frame(maxWidth: .infinity)
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
 
@@ -4052,8 +4237,9 @@ jobs:
                                               audioManager.playPrevious()
                                           } label: {
                                               Image(systemName: "backward.end.fill")
-                                                  .font(.system(size: 25, weight: .bold))
+                                                  .font(.system(size: 28, weight: .bold))
                                                   .foregroundStyle(.white)
+                                                  .frame(maxWidth: .infinity)
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
 
@@ -4062,34 +4248,30 @@ jobs:
                                           } label: {
                                               ZStack {
                                                   Circle()
-                                                      .fill(
-                                                          LinearGradient(
-                                                              colors: [store.theme.accent, store.theme.accent.opacity(0.75)],
-                                                              startPoint: .topLeading,
-                                                              endPoint: .bottomTrailing
-                                                          )
-                                                      )
-                                                      .frame(width: 68, height: 68)
-                                                      .shadow(color: store.theme.accent.opacity(0.45), radius: 14, y: 5)
+                                                      .fill(Color.white)
+                                                      .frame(width: 74, height: 74)
+                                                      .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
 
                                                   if audioManager.isResolvingFullStream {
                                                       ProgressView().tint(.black)
                                                   } else {
                                                       Image(systemName: audioManager.isPlaying ? "pause.fill" : "play.fill")
-                                                          .font(.system(size: 26, weight: .black))
+                                                          .font(.system(size: 28, weight: .black))
                                                           .foregroundStyle(Color.black)
                                                           .offset(x: audioManager.isPlaying ? 0 : 2)
                                                   }
                                               }
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
+                                          .padding(.horizontal, 12)
 
                                           Button {
                                               audioManager.playNext()
                                           } label: {
                                               Image(systemName: "forward.end.fill")
-                                                  .font(.system(size: 25, weight: .bold))
+                                                  .font(.system(size: 28, weight: .bold))
                                                   .foregroundStyle(.white)
+                                                  .frame(maxWidth: .infinity)
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
 
@@ -4097,17 +4279,144 @@ jobs:
                                               audioManager.isRepeatEnabled.toggle()
                                           } label: {
                                               Image(systemName: "repeat")
-                                                  .font(.system(size: 19, weight: .semibold))
-                                                  .foregroundStyle(audioManager.isRepeatEnabled ? store.theme.accent : .white.opacity(0.65))
+                                                  .font(.system(size: 21, weight: .semibold))
+                                                  .foregroundStyle(audioManager.isRepeatEnabled ? Color.white : .white.opacity(0.65))
+                                                  .frame(maxWidth: .infinity)
                                           }
                                           .buttonStyle(SmoothPressButtonStyle())
                                       }
+                                      .padding(.horizontal, 16)
+                                      .padding(.top, 18)
                                       .environment(\.layoutDirection, .leftToRight)
 
-                                      Spacer(minLength: 16)
+                                      // 8. Bottom Mix Handle & Caption (Anchored at the Bottom of the Screen — Matching image_3.png)
+                                      VStack(spacing: 8) {
+                                          Capsule()
+                                              .fill(Color.white.opacity(0.24))
+                                              .frame(width: 36, height: 4)
+                                          Text("ميكس من موسيقى \(track.title)")
+                                              .font(.system(size: 13, weight: .semibold))
+                                              .foregroundStyle(.white.opacity(0.75))
+                                              .lineLimit(1)
+                                      }
+                                      .padding(.top, 22)
+                                      .padding(.bottom, 10)
+                                  }
+                                  .frame(width: geo.size.width, height: geo.size.height)
+                                  .task(id: track.id) {
+                                      await updateArtworkAndDominantColor(for: track)
                                   }
                               }
+
+                              // 9. Optional Floating Studio DSP Sliders Overlay (Doesn't Displace Bottom Controls)
+                              if showCustomDSPSliders {
+                                  ZStack(alignment: .bottom) {
+                                      Color.black.opacity(0.55)
+                                          .ignoresSafeArea()
+                                          .onTapGesture {
+                                              withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                  showCustomDSPSliders = false
+                                              }
+                                          }
+
+                                      VStack(spacing: 14) {
+                                          HStack {
+                                              Button {
+                                                  withAnimation { showCustomDSPSliders = false }
+                                              } label: {
+                                                  Image(systemName: "xmark.circle.fill")
+                                                      .font(.title3)
+                                                      .foregroundStyle(.white.opacity(0.7))
+                                              }
+                                              Spacer()
+                                              Text("استوديو السرعة والصدى (DSP Studio)")
+                                                  .font(.subheadline.weight(.bold))
+                                                  .foregroundStyle(.white)
+                                          }
+
+                                          HStack {
+                                              Text(String(format: "%.2fx", audioManager.playbackSpeed))
+                                                  .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                  .foregroundStyle(.white)
+                                              Slider(
+                                                  value: Binding(
+                                                      get: { audioManager.playbackSpeed },
+                                                      set: { newSpeed in
+                                                          audioManager.updateCustomDSP(
+                                                              speed: newSpeed,
+                                                              reverb: audioManager.reverbMix,
+                                                              varispeed: audioManager.useAnalogVarispeedPitch
+                                                          )
+                                                      }
+                                                  ),
+                                                  in: 0.65...1.35,
+                                                  step: 0.01
+                                              )
+                                              .tint(.white)
+                                              Text("سرعة الصوت")
+                                                  .font(.caption.weight(.bold))
+                                                  .foregroundStyle(.white.opacity(0.85))
+                                          }
+
+                                          HStack {
+                                              Text("\(Int(audioManager.reverbMix * 100))%")
+                                                  .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                  .foregroundStyle(.white)
+                                              Slider(
+                                                  value: Binding(
+                                                      get: { audioManager.reverbMix },
+                                                      set: { newRev in
+                                                          audioManager.updateCustomDSP(
+                                                              speed: audioManager.playbackSpeed,
+                                                              reverb: newRev,
+                                                              varispeed: audioManager.useAnalogVarispeedPitch
+                                                          )
+                                                      }
+                                                  ),
+                                                  in: 0.0...1.0,
+                                                  step: 0.02
+                                              )
+                                              .tint(.white)
+                                              Text("عمق الصدى (Reverb)")
+                                                  .font(.caption.weight(.bold))
+                                                  .foregroundStyle(.white.opacity(0.85))
+                                          }
+
+                                          Toggle(isOn: Binding(
+                                              get: { audioManager.useAnalogVarispeedPitch },
+                                              set: { newVal in
+                                                  audioManager.updateCustomDSP(
+                                                      speed: audioManager.playbackSpeed,
+                                                      reverb: audioManager.reverbMix,
+                                                      varispeed: newVal
+                                                  )
+                                              }
+                                          )) {
+                                              Text("تغيير طبقة الصوت مع السرعة (Analog Tape Pitch)")
+                                                  .font(.caption.weight(.semibold))
+                                                  .foregroundStyle(.white.opacity(0.85))
+                                          }
+                                          .tint(.white)
+                                      }
+                                      .padding(20)
+                                      .background(Color(white: 0.08))
+                                      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                                      .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.white.opacity(0.15), lineWidth: 1))
+                                      .padding(.horizontal, 16)
+                                      .padding(.bottom, 28)
+                                      .environment(\.layoutDirection, .leftToRight)
+                                  }
+                                  .transition(.opacity.combined(with: .move(edge: .bottom)))
+                              }
                           }
+                          .gesture(
+                              DragGesture(minimumDistance: 24)
+                                  .onEnded { value in
+                                      if value.translation.height > 75 && abs(value.translation.width) < 90 {
+                                          dismiss()
+                                      }
+                                  }
+                          )
                       }
                       .toolbar(.hidden, for: .navigationBar)
                       .navigationDestination(item: $selectedArtistFromPlayer) { artist in
@@ -4120,6 +4429,35 @@ jobs:
                               .environmentObject(store)
                               .environmentObject(audioManager)
                               .preferredColorScheme(.dark)
+                      }
+                  }
+              }
+
+              private func openArtistProfile(for track: HarborMusicTrack) {
+                  let primary = track.artist.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? track.artist
+                  selectedArtistFromPlayer = HarborArtistSummary(
+                      id: "art-\(primary.lowercased())",
+                      name: primary,
+                      artworkURL: track.artworkURL,
+                      genre: track.genre ?? "Studio Artist"
+                  )
+              }
+
+              private func updateArtworkAndDominantColor(for track: HarborMusicTrack) async {
+                  loadedCoverImage = nil
+                  if let img = await HarborArtworkService.shared.loadImage(from: track.artworkURL) {
+                      self.loadedCoverImage = img
+                      let palette = HarborArtworkService.shared.extractDominantColors(from: img)
+                      withAnimation(.easeInOut(duration: 0.45)) {
+                          self.bgTopColor = palette.top
+                          self.bgMidColor = palette.middle
+                          self.bgBotColor = palette.bottom
+                      }
+                  } else {
+                      withAnimation(.easeInOut(duration: 0.35)) {
+                          self.bgTopColor = Color(red: 0.22, green: 0.06, blue: 0.07)
+                          self.bgMidColor = Color(red: 0.10, green: 0.03, blue: 0.03)
+                          self.bgBotColor = Color.black
                       }
                   }
               }
@@ -4140,10 +4478,10 @@ jobs:
                           VStack(alignment: .center, spacing: 18) {
                               if audioManager.isLoadingLyrics {
                                   VStack(spacing: 10) {
-                                      ProgressView().tint(store.theme.accent)
+                                      ProgressView().tint(.white)
                                       Text("جاري جلب كلمات الأغنية...")
                                           .font(.caption.weight(.semibold))
-                                          .foregroundStyle(.white.opacity(0.6))
+                                          .foregroundStyle(.white.opacity(0.65))
                                   }
                                   .padding(.top, 80)
                               } else if !audioManager.syncedLyrics.isEmpty {
@@ -4154,7 +4492,7 @@ jobs:
                                       } label: {
                                           Text(line.text)
                                               .font(.system(size: isActive ? 20 : 16, weight: isActive ? .heavy : .semibold, design: .rounded))
-                                              .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.38))
+                                              .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.40))
                                               .multilineTextAlignment(.center)
                                               .frame(maxWidth: .infinity)
                                               .padding(.vertical, 2)
@@ -4165,14 +4503,14 @@ jobs:
                               } else if let plain = audioManager.plainLyrics, !plain.isEmpty {
                                   Text(plain)
                                       .font(.system(size: 17, weight: .semibold, design: .rounded))
-                                      .foregroundStyle(.white.opacity(0.85))
+                                      .foregroundStyle(.white.opacity(0.88))
                                       .multilineTextAlignment(.center)
                                       .lineSpacing(8)
                               } else {
                                   VStack(spacing: 10) {
                                       Image(systemName: "text.quote")
                                           .font(.title)
-                                          .foregroundStyle(store.theme.accent.opacity(0.7))
+                                          .foregroundStyle(.white.opacity(0.6))
                                       Text("لا تتوفر كلمات متزامنة لهذا المقطع حالياً")
                                           .font(.subheadline.weight(.semibold))
                                           .foregroundStyle(.white.opacity(0.55))
@@ -4192,12 +4530,12 @@ jobs:
                       }
                   }
                   .background(
-                      RoundedRectangle(cornerRadius: 24, style: .continuous)
-                          .fill(Color.white.opacity(0.05))
+                      RoundedRectangle(cornerRadius: 16, style: .continuous)
+                          .fill(Color.black.opacity(0.32))
                   )
                   .overlay(
-                      RoundedRectangle(cornerRadius: 24, style: .continuous)
-                          .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+                      RoundedRectangle(cornerRadius: 16, style: .continuous)
+                          .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
                   )
               }
 
@@ -4223,15 +4561,7 @@ jobs:
 
               var body: some View {
                   ZStack {
-                      LinearGradient(
-                          colors: [
-                              Color(red: 0.05, green: 0.07, blue: 0.13),
-                              Color(red: 0.02, green: 0.03, blue: 0.06)
-                          ],
-                          startPoint: .top,
-                          endPoint: .bottom
-                      )
-                      .ignoresSafeArea()
+                      Color.black.ignoresSafeArea()
 
                       VStack(spacing: 0) {
                           HStack {
@@ -4242,7 +4572,7 @@ jobs:
                                       .font(.system(size: 15, weight: .bold))
                                       .foregroundStyle(.white.opacity(0.85))
                                       .frame(width: 34, height: 34)
-                                      .background(Color.white.opacity(0.08))
+                                      .background(Color(white: 0.10))
                                       .clipShape(Circle())
                               }
 
@@ -4256,7 +4586,7 @@ jobs:
                                           .lineLimit(1)
                                       Text("\(track.artist) • \(audioManager.dspPreset.shortBadge)")
                                           .font(.system(size: 11.5, weight: .semibold))
-                                          .foregroundStyle(store.theme.accent)
+                                          .foregroundStyle(.white.opacity(0.65))
                                           .lineLimit(1)
                                   }
                               }
@@ -4268,9 +4598,9 @@ jobs:
                               } label: {
                                   Image(systemName: audioManager.isPlaying ? "pause.fill" : "play.fill")
                                       .font(.system(size: 15, weight: .bold))
-                                      .foregroundStyle(store.theme.accent)
+                                      .foregroundStyle(.white)
                                       .frame(width: 34, height: 34)
-                                      .background(Color.white.opacity(0.08))
+                                      .background(Color(white: 0.10))
                                       .clipShape(Circle())
                               }
                           }
@@ -4286,7 +4616,7 @@ jobs:
                                       if audioManager.isLoadingLyrics {
                                           HStack {
                                               Spacer()
-                                              ProgressView().tint(store.theme.accent)
+                                              ProgressView().tint(.white)
                                               Spacer()
                                           }
                                           .padding(.top, 80)
@@ -4299,7 +4629,6 @@ jobs:
                                                   Text(line.text)
                                                       .font(.system(size: isActive ? 24 : 20, weight: isActive ? .heavy : .semibold, design: .rounded))
                                                       .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.35))
-                                                      .shadow(color: isActive ? store.theme.accent.opacity(0.45) : .clear, radius: 8)
                                                       .multilineTextAlignment(.leading)
                                                       .frame(maxWidth: .infinity, alignment: .leading)
                                                       .animation(.easeInOut(duration: 0.22), value: isActive)
@@ -4510,7 +4839,7 @@ jobs:
                               .scaledToFill()
                       } else {
                           LinearGradient(
-                              colors: [Color(red: 0.12, green: 0.16, blue: 0.24), Color(red: 0.06, green: 0.08, blue: 0.14)],
+                              colors: [Color(white: 0.09), Color(white: 0.04)],
                               startPoint: .topLeading,
                               endPoint: .bottomTrailing
                           )
@@ -4550,7 +4879,7 @@ jobs:
                   let pdfView = PDFView()
                   pdfView.autoScales = true
                   pdfView.displayDirection = .vertical
-                  pdfView.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.10, alpha: 1.0)
+                  pdfView.backgroundColor = UIColor.black
                   pdfView.pageBreakMargins = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
 
                   if let doc = PDFDocument(url: fileURL) {
@@ -4667,7 +4996,7 @@ jobs:
 
               var body: some View {
                   ZStack {
-                      Color(red: 0.05, green: 0.06, blue: 0.08).ignoresSafeArea()
+                      Color.black.ignoresSafeArea()
 
                       ZStack {
                           HarborPDFKitRepresentable(
@@ -4922,7 +5251,7 @@ jobs:
               var body: some View {
                   NavigationStack {
                       ZStack(alignment: .top) {
-                          Color(red: 0.03, green: 0.04, blue: 0.06).ignoresSafeArea()
+                          Color.black.ignoresSafeArea()
 
                           ScrollView(.vertical, showsIndicators: false) {
                               VStack(alignment: .leading, spacing: 24) {
@@ -4988,7 +5317,7 @@ jobs:
                                       .padding(16)
                                       .background(
                                           LinearGradient(
-                                              colors: [Color(red: 0.09, green: 0.13, blue: 0.20), Color(red: 0.06, green: 0.08, blue: 0.13)],
+                                              colors: [Color(white: 0.08), Color(white: 0.04)],
                                               startPoint: .topLeading,
                                               endPoint: .bottomTrailing
                                           )
@@ -5095,7 +5424,7 @@ jobs:
                                                               .tint(store.theme.accent)
                                                       }
                                                       .padding(10)
-                                                      .background(Color(red: 0.09, green: 0.11, blue: 0.16))
+                                                      .background(Color(white: 0.07))
                                                       .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                                   }
                                                   .buttonStyle(SmoothPressButtonStyle())
@@ -5144,7 +5473,7 @@ jobs:
                                                               img.resizable().scaledToFill()
                                                           default:
                                                               ZStack {
-                                                                  Color(red: 0.11, green: 0.13, blue: 0.18)
+                                                                  Color(white: 0.09)
                                                                   Image(systemName: "book.closed.fill")
                                                                       .font(.largeTitle)
                                                                       .foregroundStyle(store.theme.accent.opacity(0.7))
@@ -5166,7 +5495,7 @@ jobs:
                                                           .lineLimit(1)
                                                   }
                                                   .padding(10)
-                                                  .background(Color(red: 0.09, green: 0.10, blue: 0.14))
+                                                  .background(Color(white: 0.07))
                                                   .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                               }
                                               .buttonStyle(SmoothPressButtonStyle())
@@ -5231,7 +5560,7 @@ jobs:
                               .foregroundStyle(store.theme.accent)
                           }
                           .padding()
-                          .background(Color(red: 0.08, green: 0.09, blue: 0.12))
+                          .background(Color(white: 0.06))
 
                           ScrollView {
                               if !book.sampleChapters.isEmpty {
@@ -5248,7 +5577,7 @@ jobs:
                                   .padding(22)
                               }
                           }
-                          .background(Color(red: 0.04, green: 0.05, blue: 0.07))
+                          .background(Color.black)
                       }
                       .navigationTitle(book.title)
                       .navigationBarTitleDisplayMode(.inline)
@@ -5443,8 +5772,15 @@ jobs:
           cd build && zip -r Harbor.ipa Payload
           ls -lh Harbor.ipa
 
-      - name: Upload IPA Artifact
+      - name: Upload IPA Artifact (No Double-Compression)
         uses: actions/upload-artifact@v4
         with:
           name: Harbor-iOS-IPA
           path: build/Harbor.ipa
+          compression-level: 0
+
+      - name: Publish Direct Harbor.ipa to GitHub Releases (No Unzip Required)
+        env:
+          GH_TOKEN: ${ secrets.GITHUB_TOKEN }
+        run: |
+          gh release create v2.8.0-latest build/Harbor.ipa             --title "Harbor iOS v2.8.0 Noir Edition (Direct Harbor.ipa)"             --notes "Direct Harbor.ipa download for iPhone — no ZIP extraction required."             --latest || gh release upload v2.8.0-latest build/Harbor.ipa --clobber
