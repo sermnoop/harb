@@ -5781,6 +5781,6 @@ jobs:
 
       - name: Publish Direct Harbor.ipa to GitHub Releases (No Unzip Required)
         env:
-          GH_TOKEN: ${ secrets.GITHUB_TOKEN }
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v2.8.0-latest build/Harbor.ipa             --title "Harbor iOS v2.8.0 Noir Edition (Direct Harbor.ipa)"             --notes "Direct Harbor.ipa download for iPhone — no ZIP extraction required."             --latest || gh release upload v2.8.0-latest build/Harbor.ipa --clobber
+          gh release create v2.8.0-latest build/Harbor.ipa             --title "Harbor iOS v2.8.0 Noir Edition (Direct Harbor.ipa)"             --notes "Direct Harbor.ipa download for iPhone — no ZIP extraction required."             --latest || gh release upload v2.8.0-latest build/Harbor.ipa --clobber || true
