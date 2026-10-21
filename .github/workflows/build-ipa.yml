@@ -1164,7 +1164,7 @@ jobs:
                   }
 
                   endObserver = NotificationCenter.default.addObserver(
-                      forName: .AVPlayerItemDidPlayToEndTime,
+                      forName: AVPlayerItem.didPlayToEndTimeNotification,
                       object: item,
                       queue: .main
                   ) { [weak self] _ in
@@ -3506,7 +3506,7 @@ jobs:
                   NotificationCenter.default.addObserver(
                       context.coordinator,
                       selector: #selector(Coordinator.pageDidChange(_:)),
-                      name: .PDFViewPageChanged,
+                      name: Notification.Name.PDFViewPageChanged,
                       object: pdfView
                   )
                   return pdfView
@@ -3545,7 +3545,7 @@ jobs:
                           context.coordinator.lastSearchTriggerID = searchTriggerID
                           let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
                           if !trimmed.isEmpty {
-                              let matches = doc.findString(trimmed, withOptions: .caseInsensitive)
+                              let matches = doc.findString(trimmed, withOptions: [.caseInsensitive])
                               if !matches.isEmpty {
                                   let pickIdx = searchTriggerID % matches.count
                                   let sel = matches[pickIdx]
@@ -3936,8 +3936,7 @@ jobs:
                                       .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                                       .overlay(
                                           RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                              .strokeBorder(style: StrokeStyle(lineWidth: 1.4, dash: [6, 4]))
-                                              .foregroundStyle(store.theme.accent.opacity(0.65))
+                                              .strokeBorder(store.theme.accent.opacity(0.65), style: StrokeStyle(lineWidth: 1.4, dash: [6, 4]))
                                       )
                                   }
                                   .buttonStyle(SmoothPressButtonStyle())
@@ -4059,10 +4058,10 @@ jobs:
                                           TextField("ابحث في مكتبة الكتب المفتوحة...", text: $searchQuery)
                                               .textFieldStyle(.roundedBorder)
                                               .onSubmit {
-                                                  Task { await store.searchBooks(query: searchQuery) }
+                                                  Task { await store.loadBooksCatalog(query: searchQuery) }
                                               }
                                           Button {
-                                              Task { await store.searchBooks(query: searchQuery) }
+                                              Task { await store.loadBooksCatalog(query: searchQuery) }
                                           } label: {
                                               Image(systemName: "magnifyingglass")
                                                   .padding(10)
