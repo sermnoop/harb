@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
@@ -12,8 +15,99 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Auto-locate and Organize Sources
+        run: |
+          mkdir -p Sources/HarborIOS
+          
+          # 1. Unpack any uploaded ZIP archives
+          for z in *.zip; do
+            if [ -f "$z" ]; then
+              echo "Extracting archive: $z"
+              unzip -q -o "$z" || true
+            fi
+          done
+          
+          # 2. Check nested folders from extraction
+          if [ -d "Harbor-iOS-SwiftUI/Sources/HarborIOS" ]; then
+            cp -rf Harbor-iOS-SwiftUI/Sources/HarborIOS/* Sources/HarborIOS/
+          fi
+          
+          # 3. Collect loose .swift and .ttf files uploaded at root or subfolders
+          find . -maxdepth 3 -name "*.swift" ! -path "./Sources/HarborIOS/*" -exec cp -f {} Sources/HarborIOS/ \; 2>/dev/null || true
+          find . -maxdepth 3 -name "*.ttf" ! -path "./Sources/HarborIOS/*" -exec cp -f {} Sources/HarborIOS/ \; 2>/dev/null || true
+          
+          # 4. Generate project.yml if missing or invalid
+          if [ ! -f project.yml ] || ! grep -q 'HarborIOS' project.yml; then
+            cat << 'EOF' > project.yml
+          name: HarborIOS
+          options:
+            bundleIdPrefix: com.harbor
+            deploymentTarget:
+              iOS: "17.0"
+          targets:
+            HarborIOS:
+              type: application
+              platform: iOS
+              deploymentTarget: "17.0"
+              sources:
+                - path: Sources/HarborIOS
+                  excludes:
+                    - "**/*.plist"
+                    - "Package.swift"
+              info:
+                path: Info.plist
+                properties:
+                  CFBundleDisplayName: Harbor
+                  CFBundleName: HarborIOS
+                  CFBundleExecutable: $(EXECUTABLE_NAME)
+                  CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+                  CFBundleInfoDictionaryVersion: "6.0"
+                  CFBundlePackageType: APPL
+                  CFBundleShortVersionString: "3.0.0"
+                  CFBundleVersion: "20"
+                  UIAppFonts:
+                    - ThmanyahSans-Regular.ttf
+                  LSRequiresIPhoneOS: true
+                  UIRequiresFullScreen: true
+                  UIStatusBarStyle: UIStatusBarStyleLightContent
+                  UIViewControllerBasedStatusBarAppearance: false
+                  LSSupportsOpeningDocumentsInPlace: true
+                  UIFileSharingEnabled: true
+                  UIApplicationSupportsIndirectInputEvents: true
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  UIBackgroundModes:
+                    - audio
+                  NSAppTransportSecurity:
+                    NSAllowsArbitraryLoads: true
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.harbor.ios
+                  PRODUCT_NAME: HarborIOS
+                  SWIFT_VERSION: "5.0"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  GENERATE_INFOPLIST_FILE: YES
+                  CODE_SIGN_IDENTITY: ""
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGNING_ALLOWED: NO
+          EOF
+          fi
+
+          echo "=== Content of Sources/HarborIOS ==="
+          ls -la Sources/HarborIOS/
+
+      - name: Select Xcode 16
+        run: |
+          if [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -21,26 +115,39 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      - name: Archive Project
+      - name: Build App Bundle
         run: |
-          xcodebuild archive \
+          xcodebuild build \
             -project HarborIOS.xcodeproj \
             -scheme HarborIOS \
             -configuration Release \
-            -archivePath build/HarborIOS.xcarchive \
-            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Package IPA
         run: |
+          APP_PATH=$(find build/DerivedData -name "HarborIOS.app" -type d | head -n 1)
+          echo "Found compiled app at: $APP_PATH"
+          codesign --force --deep --sign - "$APP_PATH" || true
           mkdir -p build/Payload
-          cp -r build/HarborIOS.xcarchive/Products/Applications/HarborIOS.app build/Payload/Harbor.app
+          cp -r "$APP_PATH" build/Payload/Harbor.app
           cd build && zip -r Harbor.ipa Payload
+          ls -lh Harbor.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Harbor-iOS-IPA
           path: build/Harbor.ipa
+
+      - name: Publish Direct Harbor.ipa to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v3.0.0 build/Harbor.ipa \
+            --title "Harbor iOS v3.0.0" \
+            --notes "Automated build of Harbor iOS v3.0.0 (Build 20)" \
+            --latest || gh release upload v3.0.0 build/Harbor.ipa --clobber || true
