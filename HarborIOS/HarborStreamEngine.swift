@@ -154,7 +154,7 @@ enum HarborStreamEngine {
             sourceType = "WEB-DL"
         } else if upper.contains("WEBRIP") {
             sourceType = "WEBRip"
-        } else if upper.contains("CAM") || upper.contains("HDCAM") || upper.contains("TS") || upper.contains("TELESYNC") {
+        } else if upper.contains("HDCAM") || upper.contains("TELESYNC") {
             sourceType = "CAM"
         } else {
             sourceType = nil

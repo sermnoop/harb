@@ -15,22 +15,22 @@ enum HarborThemePreset: String, CaseIterable, Identifiable, Codable {
 
     var backgroundPrimary: Color {
         switch self {
-        case .harbor:  return Color(red: 0.05, green: 0.07, blue: 0.12)
+        case .harbor:  return Color.black
         case .nord:    return Color(red: 0.18, green: 0.20, blue: 0.25)
         case .dracula: return Color(red: 0.16, green: 0.16, blue: 0.21)
         case .royal:   return Color(red: 0.08, green: 0.05, blue: 0.16)
-        case .noir:    return Color(red: 0.04, green: 0.04, blue: 0.05)
+        case .noir:    return Color.black
         case .aurora:  return Color(red: 0.04, green: 0.11, blue: 0.12)
         }
     }
 
     var backgroundSecondary: Color {
         switch self {
-        case .harbor:  return Color(red: 0.09, green: 0.13, blue: 0.20)
+        case .harbor:  return Color(white: 0.07)
         case .nord:    return Color(red: 0.23, green: 0.26, blue: 0.32)
         case .dracula: return Color(red: 0.21, green: 0.22, blue: 0.29)
         case .royal:   return Color(red: 0.14, green: 0.09, blue: 0.26)
-        case .noir:    return Color(red: 0.10, green: 0.10, blue: 0.12)
+        case .noir:    return Color(white: 0.07)
         case .aurora:  return Color(red: 0.07, green: 0.18, blue: 0.20)
         }
     }
@@ -41,7 +41,7 @@ enum HarborThemePreset: String, CaseIterable, Identifiable, Codable {
         case .nord:    return Color(red: 0.53, green: 0.75, blue: 0.82)
         case .dracula: return Color(red: 0.74, green: 0.58, blue: 0.98)
         case .royal:   return Color(red: 0.95, green: 0.73, blue: 0.25)
-        case .noir:    return Color(red: 0.90, green: 0.90, blue: 0.92)
+        case .noir:    return Color.white
         case .aurora:  return Color(red: 0.20, green: 0.88, blue: 0.68)
         }
     }
@@ -258,10 +258,26 @@ struct LRCLibResponse: Codable {
     let syncedLyrics: String?
 }
 
-struct SyncedLyricLine: Identifiable, Hashable {
-    let id = UUID()
+struct SyncedLyricLine: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
     let timestampSeconds: Double
     let text: String
+}
+
+// MARK: - 3B. User Music Playlist Model (v3.0)
+
+struct HarborMusicPlaylist: Identifiable, Codable, Hashable {
+    let id: String
+    var name: String
+    var tracks: [HarborMusicTrack]
+    var createdAt: Date
+
+    init(id: String = UUID().uuidString, name: String, tracks: [HarborMusicTrack] = [], createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.tracks = tracks
+        self.createdAt = createdAt
+    }
 }
 
 // MARK: - 4. Books & Ebooks Domain Models (Open Library & Project Gutenberg)
